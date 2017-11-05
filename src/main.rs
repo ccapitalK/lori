@@ -12,6 +12,6 @@ fn main() {
         let mut f = File::open("in.lua").unwrap();
         f.read_to_end(&mut data).unwrap();
     }
-    let (_, tokens) = lex::parse_buffer(&data[..]).unwrap();
+    let tokens = lex::tokenify_string(data.as_slice()).unwrap();
     println!("{:?}", tokens);
 }

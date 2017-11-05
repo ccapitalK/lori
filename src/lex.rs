@@ -7,6 +7,7 @@ pub enum LexicalElement<'a> {
     Identifier(&'a str),
     StringLiteral(&'a str),
     Number(&'a str),
+    Comment,
     Comma,
     Dot,
     Concat,
@@ -58,7 +59,36 @@ const KEYWORDS: [&str; 21] = [
     "while",
 ];
 
-//TODO: handle [===[ delimiters
+fn parse_multiline_string(input: &[u8]) -> IResult<&[u8], LexicalElement> {
+    let mut i = 0;
+    {
+        if input.len() <  2 || input[i] != b'[' {
+            return IResult::Error(ErrorKind::IsNot);
+        }
+        i += 1;
+        while i < input.len() && input[i] == b'=' {
+            i += 1;
+        }
+        if input.len() <= i || input[i] != b'[' {
+            return IResult::Error(ErrorKind::IsNot);
+        }
+        i += 1;
+    }
+    let len = i - 2;
+    {
+        while i < input.len() - (len + 2) {
+            if input[i] == b']' && input[i+len+1] == b']' && 
+                input[i+1..i+len+1].iter().filter(|&x| x != &b'=').count() == 0 {
+                let out_range = &input[len+2..i];
+                let out_token = LexicalElement::StringLiteral(str::from_utf8(out_range).unwrap());
+                return IResult::Done(&input[i+len+2..], out_token);
+            }
+            i += 1;
+        }
+    }
+    IResult::Incomplete(Needed::Unknown)
+}
+
 fn parse_string_literal(input: &[u8]) -> IResult<&[u8], LexicalElement> {
     if input[0] != b'"' && input[0] != b'\'' {
         return IResult::Error(ErrorKind::IsNot);
@@ -134,11 +164,36 @@ fn parse_identifier(input: &[u8]) -> IResult<&[u8], LexicalElement> {
     )
 }
 
-//TODO: handle comments
-named!(pub parse_buffer<Vec<LexicalElement>>, ws!(many0!(alt!( 
+pub fn parse_comment(input: &[u8]) -> IResult<&[u8], LexicalElement> {
+    if input.len() < 2 || &input[..2] != b"--" {
+        return IResult::Error(ErrorKind::IsNot);
+    }
+    let (mut i, in_ml) = if input.len() >= 4 && &input[..4] == b"--[[" {
+        (4, true)
+    } else {
+        (2, false)
+    };
+    while i < input.len() {
+        if in_ml {
+            if i < input.len() - 3 && &input[i..i+4] == b"]]--" {
+                return IResult::Done(&input[i+4..], LexicalElement::Comment);
+            }
+        } else {
+            if input[i] == b'\n' {
+                return IResult::Done(&input[i+1..], LexicalElement::Comment);
+            }
+        }
+        i += 1;
+    }
+    IResult::Error(ErrorKind::IsNot)
+}
+
+named!(parse_buffer<Vec<LexicalElement>>, ws!(many0!(alt!( 
        parse_identifier |
        parse_number |
+       parse_comment |
        parse_string_literal |
+       parse_multiline_string |
        value!(LexicalElement::Comma       , tag!(","))  |
        value!(LexicalElement::Elipsis     , tag!("..."))|
        value!(LexicalElement::Concat      , tag!("..")) |
@@ -165,3 +220,11 @@ named!(pub parse_buffer<Vec<LexicalElement>>, ws!(many0!(alt!(
        value!(LexicalElement::GreaterEqual, tag!(">=")) |
        value!(LexicalElement::GreaterThan , tag!(">")) 
        ))));
+
+pub fn tokenify_string(data: &[u8]) -> Result<Vec<LexicalElement>,()> {
+    match parse_buffer(data) {
+        IResult::Done(_, v) => Ok(v.into_iter().filter(|ref mut x| **x != LexicalElement::Comment)
+                                  .collect()),
+        _ => Err(()),
+    }
+}
