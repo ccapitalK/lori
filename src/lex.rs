@@ -1,39 +1,6 @@
 use nom::*;
 use std::str;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LexicalElement<'a> {
-    Keyword(&'static str),
-    Identifier(&'a str),
-    StringLiteral(&'a str),
-    Number(&'a str),
-    Comment,
-    Comma,
-    Dot,
-    Concat,
-    Elipsis,
-    Plus,
-    Minus,
-    Mult,
-    Div,
-    Mod,
-    Caret,
-    Hash,
-    OpenParen,
-    CloseParen,
-    OpenSquare,
-    CloseSquare,
-    OpenBrace,
-    CloseBrace,
-    Colon,
-    Semicolon,
-    LessEqual,
-    LessThan,
-    Equals,
-    Assign,
-    GreaterEqual,
-    GreaterThan,
-}
+use types::LexicalElement;
 
 const KEYWORDS: [&str; 21] = [
     "and",
@@ -188,6 +155,9 @@ pub fn parse_comment(input: &[u8]) -> IResult<&[u8], LexicalElement> {
     IResult::Error(ErrorKind::IsNot)
 }
 
+//TODO: handle edge cases in string literals
+// - conversion between string data and actual escaped strings
+// - if first character in multiline is newline, don't add this multiline
 named!(parse_buffer<Vec<LexicalElement>>, ws!(many0!(alt!( 
        parse_identifier |
        parse_number |

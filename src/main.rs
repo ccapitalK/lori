@@ -5,6 +5,7 @@ use std::fs::File;
 use std::io::Read;
 
 mod lex;
+mod types;
 
 fn main() {
     let mut data = Vec::new();
