@@ -4,8 +4,9 @@ extern crate nom;
 use std::fs::File;
 use std::io::Read;
 
-mod lex;
 mod types;
+mod lex;
+mod parse;
 
 fn main() {
     let mut data = Vec::new();

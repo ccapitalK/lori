@@ -155,9 +155,17 @@ pub fn parse_comment(input: &[u8]) -> IResult<&[u8], LexicalElement> {
     IResult::Error(ErrorKind::IsNot)
 }
 
-//TODO: handle edge cases in string literals
-// - conversion between string data and actual escaped strings
-// - if first character in multiline is newline, don't add this multiline
+//  TODO: handle edge cases in string literals
+//  - conversion between string data and actual escaped strings
+//  - if first character in multiline is newline, don't add this multiline
+//  TODO: URGENT: handle escapes in string literals
+//  TODO: Identifiers can contain any characters considered 
+//      'alphabetic in the current locale'
+//  TODO: Exponential notation
+//  TODO: hexadecimal double notation (dear lord, why?)
+//  TODO: You know what, redo this whole thing,
+//      a bunch of stuff needs to be reconsidered from an 
+//      architectural perspective anyway (how would error messages be implemented?
 named!(parse_buffer<Vec<LexicalElement>>, ws!(many0!(alt!( 
        parse_identifier |
        parse_number |
@@ -186,6 +194,7 @@ named!(parse_buffer<Vec<LexicalElement>>, ws!(many0!(alt!(
        value!(LexicalElement::LessEqual   , tag!("<=")) |
        value!(LexicalElement::LessThan    , tag!("<"))  |
        value!(LexicalElement::Equals      , tag!("==")) |
+       value!(LexicalElement::NotEquals   , tag!("~=")) |
        value!(LexicalElement::Assign      , tag!("="))  |
        value!(LexicalElement::GreaterEqual, tag!(">=")) |
        value!(LexicalElement::GreaterThan , tag!(">")) 
@@ -196,5 +205,45 @@ pub fn tokenify_string(data: &[u8]) -> Result<Vec<LexicalElement>,()> {
         IResult::Done(_, v) => Ok(v.into_iter().filter(|ref mut x| **x != LexicalElement::Comment)
                                   .collect()),
         _ => Err(()),
+    }
+}
+
+#[test]
+fn test_lexer() {
+    use std::fs::File;
+    use std::io::Read;
+    use std::cmp::Ordering;
+    use types::LexicalElement::*;
+    let mut data = Vec::new();
+    {
+        let mut f = File::open("tests/lex/test1").unwrap();
+        f.read_to_end(&mut data).unwrap();
+    }
+    let tokens = tokenify_string(data.as_slice()).unwrap();
+    let expected = [Comma, Elipsis, Concat, Dot, Plus, Minus, Mult, Div, 
+        Mod, Caret, Hash, OpenParen, CloseParen, OpenBrace, CloseBrace,
+        OpenSquare, CloseSquare, Semicolon, Colon, LessEqual, LessThan,
+        Equals, Assign, GreaterEqual, GreaterThan, Keyword("and"), 
+        Keyword("break"), Keyword("do"), Keyword("else"), Keyword("elseif"),
+        Keyword("end"), Keyword("false"), Keyword("for"), Keyword("function"),
+        Keyword("if"), Keyword("in"), Keyword("local"), Keyword("nil"),
+        Keyword("not"), Keyword("or"), Keyword("repeat"), Keyword("return"),
+        Keyword("then"), Keyword("true"), Keyword("until"), Keyword("while"),
+        Identifier("hello"), Identifier("waldo7"), Number("7"), 
+        Identifier("wait"), Number("8.0")
+    ];
+
+    match tokens.len().cmp(&expected.len()) {
+        Ordering::Less => {
+            panic!("Unexpected EOF: Expected {:?}", expected[tokens.len()]);
+        },
+        Ordering::Greater => {
+            panic!("Expected EOF: Got {:?}", tokens[expected.len()]);
+        },
+        Ordering::Equal => for (t, e) in tokens.iter().zip(expected.iter()) {
+            if t != e {
+                panic!("Expected {:?}, got {:?}", e, t);
+            }
+        }
     }
 }
