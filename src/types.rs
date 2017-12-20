@@ -77,6 +77,12 @@ impl BinOp {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum FieldSep {
+    Semicolon,
+    Comma
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum SimpleExp {
     Nil,
     False,
@@ -93,10 +99,57 @@ pub enum PrefixExp {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Exp {
-    SimpleExp(SimpleExp),
+    SimpleExp(Box<SimpleExp>),
     UnaryOp(UnOp, Box<Exp>),
     BinaryOp(Box<Exp>, BinOp, Box<Exp>),
-    PrefixExp(Box<PrefixExp>)
+    PrefixExp(Box<PrefixExp>),
+    TableConstructor(Box<TableConstructor>)
 }
 
-struct Chunk;
+#[derive(Debug, Clone, PartialEq)]
+pub enum Field {
+    Exp(Box<Exp>),
+    NamedExp(String, Box<Exp>),
+    IndexExp(Box<Exp>, Box<Exp>)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableConstructor(pub Vec<Field>);
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NameList(pub Vec<String>);
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParList(pub Vec<String>, pub bool);
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FuncName(pub Vec<String>, pub Option<String>);
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExpList(pub Vec<Exp>);
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Args {
+    ExpList(Box<ExpList>),
+    TableConstructor(Box<TableConstructor>),
+    StringLiteral(String)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Function(pub FuncBody);
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FuncBody(pub Box<ParList>, pub Box<Chunk>);
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Stat{
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum LastStat{
+    Return(Box<ExpList>)
+    Break,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Chunk(pub Vec<Stat>, pub Option<LastStat>);
