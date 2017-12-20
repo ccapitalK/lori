@@ -89,7 +89,7 @@ pub enum SimpleExp {
     True,
     Number(f64),
     StringLiteral(String),
-    Elipsis,
+    Elipsis
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -147,8 +147,8 @@ pub enum Stat{
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum LastStat{
-    Return(Box<ExpList>)
-    Break,
+    Return(Box<ExpList>),
+    Break
 }
 
 #[derive(Debug, Clone, PartialEq)]
