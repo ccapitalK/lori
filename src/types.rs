@@ -89,21 +89,19 @@ pub enum SimpleExp {
     True,
     Number(f64),
     StringLiteral(String),
-    Elipsis
+    Elipsis,
+    TableConstructor(Box<TableConstructor>),
+    PrefixExp(Box<PrefixExp>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum PrefixExp {
-    BracketExp(Exp)
-}
+pub struct PrefixExp(pub Box<VarOrExp>, pub Vec<NameAndArgs>);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Exp {
     SimpleExp(Box<SimpleExp>),
     UnaryOp(UnOp, Box<Exp>),
     BinaryOp(Box<Exp>, BinOp, Box<Exp>),
-    PrefixExp(Box<PrefixExp>),
-    TableConstructor(Box<TableConstructor>)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -142,7 +140,30 @@ pub struct Function(pub FuncBody);
 pub struct FuncBody(pub Box<ParList>, pub Box<Chunk>);
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct FunctionCall(pub Box<VarOrExp>, pub Vec<NameAndArgs>);
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Var{
+    Name(String, Vec<VarSuffix>),
+    Exp(Exp, Vec<VarSuffix>)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VarList(pub Vec<Var>);
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Stat{
+    Assign(Box<VarList>, Box<ExpList>),
+    FunctionCall(Box<FunctionCall>),
+    DoBlock(Box<Chunk>),
+    WhileBlock(Box<Exp>, Box<Chunk>),
+    RepeatBlock(Box<Exp>, Box<Chunk>),
+    IfElseBlock(Vec<(Exp, Chunk)>, Option<Box<Chunk>>),
+    ForRangeBlock(String, Vec<Exp>, Box<Chunk>),
+    ForInBlock(Box<NameList>, Box<ExpList>, Box<Chunk>),
+    FunctionDec(FuncName, Box<FuncBody>),
+    LocalFunctionDec(String, Box<FuncBody>),
+    LocalAssign(Box<NameList>, Option<ExpList>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -153,3 +174,18 @@ pub enum LastStat{
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Chunk(pub Vec<Stat>, pub Option<LastStat>);
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NameAndArgs(pub Option<String>, pub Args);
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum VarSuffix{
+    Index(Vec<NameAndArgs>, Exp),
+    Member(Vec<NameAndArgs>, String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum VarOrExp{
+    Var(Var),
+    Exp(Exp),
+}
