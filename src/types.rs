@@ -199,204 +199,204 @@ pub enum VarOrExp{
 }
 
 pub trait ASTVisitor<T> {
-    fn visit_name(&mut self, _: &str) -> Option<T> {
+    fn visit_name(&mut self, _: &mut String) -> Option<T> {
         None
     }
-    fn visit_unary_op(&mut self, _: &UnOp) -> Option<T> {
+    fn visit_unary_op(&mut self, _: &mut UnOp) -> Option<T> {
         None
     }
-    fn visit_binary_op(&mut self, _: &BinOp) -> Option<T> {
+    fn visit_binary_op(&mut self, _: &mut BinOp) -> Option<T> {
         None
     }
-    fn visit_field_sep(&mut self, _: &FieldSep) -> Option<T> {
+    fn visit_field_sep(&mut self, _: &mut FieldSep) -> Option<T> {
         None
     }
-    fn visit_simple_exp(&mut self, se: &SimpleExp) -> Option<T> {
+    fn visit_simple_exp(&mut self, se: &mut SimpleExp) -> Option<T> {
         match se {
-            &SimpleExp::TableConstructor(ref b) => self.visit_table_constructor(b.as_ref()),
-            &SimpleExp::PrefixExp(ref b) => self.visit_prefix_exp(b.as_ref()),
+            &mut SimpleExp::TableConstructor(ref mut b) => self.visit_table_constructor(b.as_mut()),
+            &mut SimpleExp::PrefixExp(ref mut b) => self.visit_prefix_exp(b.as_mut()),
             _ => None,
         }
     }
-    fn visit_prefix_exp(&mut self, pe: &PrefixExp) -> Option<T> {
-        self.visit_var_or_exp(pe.0.as_ref());
-        for naa in pe.1.iter() {
+    fn visit_prefix_exp(&mut self, pe: &mut PrefixExp) -> Option<T> {
+        self.visit_var_or_exp(pe.0.as_mut());
+        for naa in pe.1.iter_mut() {
             self.visit_name_and_args(naa);
         }
         None
     }
-    fn visit_exp(&mut self, pe: &Exp) -> Option<T> {
+    fn visit_exp(&mut self, pe: &mut Exp) -> Option<T> {
         match pe {
-            &Exp::SimpleExp(ref b) => self.visit_simple_exp(b.as_ref()),
-            &Exp::UnaryOp(ref u, ref b) => {
+            &mut Exp::SimpleExp(ref mut b) => self.visit_simple_exp(b.as_mut()),
+            &mut Exp::UnaryOp(ref mut u, ref mut b) => {
                 self.visit_unary_op(u); 
-                self.visit_exp(b.as_ref()); 
+                self.visit_exp(b.as_mut()); 
                 None
             },
-            &Exp::BinaryOp(ref b1, ref bo, ref b2) => {
-                self.visit_exp(b1.as_ref()); 
+            &mut Exp::BinaryOp(ref mut b1, ref mut bo, ref mut b2) => {
+                self.visit_exp(b1.as_mut()); 
                 self.visit_binary_op(bo); 
-                self.visit_exp(b2.as_ref()); 
+                self.visit_exp(b2.as_mut()); 
                 None
             }, 
         }
     }
-    fn visit_field(&mut self, f: &Field) -> Option<T> {
+    fn visit_field(&mut self, f: &mut Field) -> Option<T> {
         match f {
-            &Field::Exp(ref b) => self.visit_exp(b.as_ref()),
-            &Field::NamedExp(ref s, ref b) => {
-                self.visit_name(s.as_str());
-                self.visit_exp(b.as_ref());
+            &mut Field::Exp(ref mut b) => self.visit_exp(b.as_mut()),
+            &mut Field::NamedExp(ref mut s, ref mut b) => {
+                self.visit_name(s);
+                self.visit_exp(b.as_mut());
                 None
             },
-            &Field::IndexExp(ref b1, ref b2) =>{
-                self.visit_exp(b1.as_ref());
-                self.visit_exp(b2.as_ref());
+            &mut Field::IndexExp(ref mut b1, ref mut b2) =>{
+                self.visit_exp(b1.as_mut());
+                self.visit_exp(b2.as_mut());
                 None
             },
         }
     }
-    fn visit_table_constructor(&mut self, tc: &TableConstructor) -> Option<T> {
-        for field in tc.0.iter() {
+    fn visit_table_constructor(&mut self, tc: &mut TableConstructor) -> Option<T> {
+        for field in tc.0.iter_mut() {
             self.visit_field(field);
         }
         None
     }
-    fn visit_name_list(&mut self, nl: &NameList) -> Option<T> {
-        for name in nl.0.iter() {
+    fn visit_name_list(&mut self, nl: &mut NameList) -> Option<T> {
+        for name in nl.0.iter_mut() {
             self.visit_name(name);
         }
         None
     }
-    fn visit_par_list(&mut self, pl: &ParList) -> Option<T> {
-        for parameter in pl.0.iter() {
+    fn visit_par_list(&mut self, pl: &mut ParList) -> Option<T> {
+        for parameter in pl.0.iter_mut() {
             self.visit_name(parameter);
         }
         None
     }
-    fn visit_func_name(&mut self, f: &FuncName) -> Option<T> {
-        for name in f.0.iter() {
+    fn visit_func_name(&mut self, f: &mut FuncName) -> Option<T> {
+        for name in f.0.iter_mut() {
             self.visit_name(name);
         }
-        if let &Some(ref v) = &f.1 {
-            self.visit_name(v.as_str());
+        if let &mut Some(ref mut v) = &mut f.1 {
+            self.visit_name(v);
         }
         None
     }
-    fn visit_exp_list(&mut self, el: &ExpList) -> Option<T> {
-        for exp in el.0.iter() {
+    fn visit_exp_list(&mut self, el: &mut ExpList) -> Option<T> {
+        for exp in el.0.iter_mut() {
             self.visit_exp(exp);
         }
         None
     }
-    fn visit_args(&mut self, a: &Args) -> Option<T> {
+    fn visit_args(&mut self, a: &mut Args) -> Option<T> {
         match a {
-            &Args::ExpList(ref b) => self.visit_exp_list(b.as_ref()),
-            &Args::TableConstructor(ref b) => self.visit_table_constructor(b.as_ref()),
+            &mut Args::ExpList(ref mut b) => self.visit_exp_list(b.as_mut()),
+            &mut Args::TableConstructor(ref mut b) => self.visit_table_constructor(b.as_mut()),
             _ => None,
         }
     }
-    fn visit_function(&mut self, f: &Function) -> Option<T> {
-        self.visit_func_body(&f.0)
+    fn visit_function(&mut self, f: &mut Function) -> Option<T> {
+        self.visit_func_body(&mut f.0)
     }
-    fn visit_func_body(&mut self, fb: &FuncBody) -> Option<T> {
-        self.visit_par_list(fb.0.as_ref());
-        self.visit_chunk(fb.1.as_ref());
+    fn visit_func_body(&mut self, fb: &mut FuncBody) -> Option<T> {
+        self.visit_par_list(fb.0.as_mut());
+        self.visit_chunk(fb.1.as_mut());
         None
     }
-    fn visit_function_call(&mut self, fc: &FunctionCall) -> Option<T> {
-        self.visit_var_or_exp(fc.0.as_ref());
-        for name_and_args in fc.1.iter() {
+    fn visit_function_call(&mut self, fc: &mut FunctionCall) -> Option<T> {
+        self.visit_var_or_exp(fc.0.as_mut());
+        for name_and_args in fc.1.iter_mut() {
             self.visit_name_and_args(name_and_args);
         }
         None
     }
-    fn visit_var(&mut self, v: &Var) -> Option<T> {
+    fn visit_var(&mut self, v: &mut Var) -> Option<T> {
         match v {
-            &Var::Name(ref n, ref vss) => {
-                self.visit_name(n.as_str());
-                for vs in vss.iter(){
+            &mut Var::Name(ref mut n, ref mut vss) => {
+                self.visit_name(n);
+                for vs in vss.iter_mut(){
                     self.visit_var_suffix(vs);
                 }
             },
-            &Var::Exp(ref e, ref vss) => {
+            &mut Var::Exp(ref mut e, ref mut vss) => {
                 self.visit_exp(e);
-                for vs in vss.iter(){
+                for vs in vss.iter_mut(){
                     self.visit_var_suffix(vs);
                 }
             },
         };
         None
     }
-    fn visit_var_list(&mut self, vl: &VarList) -> Option<T> {
-        for v in vl.0.iter() {
+    fn visit_var_list(&mut self, vl: &mut VarList) -> Option<T> {
+        for v in vl.0.iter_mut() {
             self.visit_var(v);
         }
         None
     }
-    fn visit_stat(&mut self, s: &Stat) -> Option<T> {
+    fn visit_stat(&mut self, s: &mut Stat) -> Option<T> {
         match s {
-            &Stat::Assign(ref vl, ref el) => {
-                for v in vl.0.iter() {
+            &mut Stat::Assign(ref mut vl, ref mut el) => {
+                for v in vl.0.iter_mut() {
                     self.visit_var(v);
                 }
-                for e in el.0.iter() {
+                for e in el.0.iter_mut() {
                     self.visit_exp(e);
                 }
                 None
             },
-            &Stat::FunctionCall(ref fc) => self.visit_function_call(fc.as_ref()),
-            &Stat::DoBlock(ref ch) => self.visit_chunk(ch.as_ref()),
-            &Stat::WhileBlock(ref e, ref ch) => {
+            &mut Stat::FunctionCall(ref mut fc) => self.visit_function_call(fc.as_mut()),
+            &mut Stat::DoBlock(ref mut ch) => self.visit_chunk(ch.as_mut()),
+            &mut Stat::WhileBlock(ref mut e, ref mut ch) => {
                 self.visit_exp(e);
                 self.visit_chunk(ch);
                 None
             },
-            &Stat::RepeatBlock(ref e, ref ch) => {
+            &mut Stat::RepeatBlock(ref mut e, ref mut ch) => {
                 self.visit_exp(e);
                 self.visit_chunk(ch);
                 None
             },
-            &Stat::IfElseBlock(ref v, ref och) => {
-                for &(ref e, ref ch) in v.iter() {
+            &mut Stat::IfElseBlock(ref mut v, ref mut och) => {
+                for &mut (ref mut e, ref mut ch) in v.iter_mut() {
                     self.visit_exp(e);
                     self.visit_chunk(ch);
                 }
-                if let &Some(ref och) = och {
+                if let &mut Some(ref mut och) = och {
                     self.visit_chunk(och);
                 }
                 None
             },
-            &Stat::ForRangeBlock(ref n, ref el, ref ch) => {
-                self.visit_name(n.as_str());
-                for e in el.iter() {
+            &mut Stat::ForRangeBlock(ref mut n, ref mut el, ref mut ch) => {
+                self.visit_name(n);
+                for e in el.iter_mut() {
                     self.visit_exp(e);
                 }
-                self.visit_chunk(ch.as_ref());
+                self.visit_chunk(ch.as_mut());
                 None
             },
-            &Stat::ForInBlock(ref nl, ref el, ref ch) => {
-                self.visit_name_list(nl.as_ref());
-                self.visit_exp_list(el.as_ref());
-                self.visit_chunk(ch.as_ref());
+            &mut Stat::ForInBlock(ref mut nl, ref mut el, ref mut ch) => {
+                self.visit_name_list(nl.as_mut());
+                self.visit_exp_list(el.as_mut());
+                self.visit_chunk(ch.as_mut());
                 None
             },
-            &Stat::FunctionDec(ref n, ref fb) => {
+            &mut Stat::FunctionDec(ref mut n, ref mut fb) => {
                 self.visit_func_name(n);
-                self.visit_func_body(fb.as_ref());
+                self.visit_func_body(fb.as_mut());
                 None
             },
-            &Stat::LocalFunctionDec(ref n, ref fb) => {
-                self.visit_name(n.as_str());
-                self.visit_func_body(fb.as_ref());
+            &mut Stat::LocalFunctionDec(ref mut n, ref mut fb) => {
+                self.visit_name(n);
+                self.visit_func_body(fb.as_mut());
                 None
             },
-            &Stat::LocalAssign(ref nl, ref el) => {
-                for n in nl.0.iter() {
+            &mut Stat::LocalAssign(ref mut nl, ref mut el) => {
+                for n in nl.0.iter_mut() {
                     self.visit_name(n);
                 }
-                if let &Some(ref el) = el {
-                    for e in el.0.iter() {
+                if let &mut Some(ref mut el) = el {
+                    for e in el.0.iter_mut() {
                         self.visit_exp(e);
                     }
                 }
@@ -404,49 +404,49 @@ pub trait ASTVisitor<T> {
             },
         }
     }
-    fn visit_last_stat(&mut self, ls: &LastStat) -> Option<T> {
+    fn visit_last_stat(&mut self, ls: &mut LastStat) -> Option<T> {
         match ls {
-            &LastStat::Return(ref b) => self.visit_exp_list(b.as_ref()),
-            &LastStat::Break => None,
+            &mut LastStat::Return(ref mut b) => self.visit_exp_list(b.as_mut()),
+            &mut LastStat::Break => None,
         }
     }
-    fn visit_chunk(&mut self, ch: &Chunk) -> Option<T> {
-        for s in ch.0.iter() {
+    fn visit_chunk(&mut self, ch: &mut Chunk) -> Option<T> {
+        for s in ch.0.iter_mut() {
             self.visit_stat(s);
         }
-        if let &Some(ref ls) = &ch.1 {
+        if let &mut Some(ref mut ls) = &mut ch.1 {
             self.visit_last_stat(ls);
         }
         None
     }
-    fn visit_name_and_args(&mut self, naa: &NameAndArgs) -> Option<T> {
-        if let &Some(ref s) = &naa.0 {
-            self.visit_name(s.as_str());
+    fn visit_name_and_args(&mut self, naa: &mut NameAndArgs) -> Option<T> {
+        if let &mut Some(ref mut s) = &mut naa.0 {
+            self.visit_name(s);
         }
-        self.visit_args(&naa.1);
+        self.visit_args(&mut naa.1);
         None
     }
-    fn visit_var_suffix(&mut self, vs: &VarSuffix) -> Option<T> {
+    fn visit_var_suffix(&mut self, vs: &mut VarSuffix) -> Option<T> {
         match vs {
-            &VarSuffix::Index(ref naas, ref e) => {
-                for naa in naas.iter() {
+            &mut VarSuffix::Index(ref mut naas, ref mut e) => {
+                for naa in naas.iter_mut() {
                     self.visit_name_and_args(naa);
                 }
                 self.visit_exp(e);
             },
-            &VarSuffix::Member(ref naas, ref s) => {
-                for naa in naas.iter() {
+            &mut VarSuffix::Member(ref mut naas, ref mut s) => {
+                for naa in naas.iter_mut() {
                     self.visit_name_and_args(naa);
                 }
-                self.visit_name(s.as_str());
+                self.visit_name(s);
             },
         };
         None
     }
-    fn visit_var_or_exp(&mut self, voe: &VarOrExp) -> Option<T> {
+    fn visit_var_or_exp(&mut self, voe: &mut VarOrExp) -> Option<T> {
         match voe {
-            &VarOrExp::Var(ref v) => self.visit_var(v),
-            &VarOrExp::Exp(ref e) => self.visit_exp(e),
+            &mut VarOrExp::Var(ref mut v) => self.visit_var(v),
+            &mut VarOrExp::Exp(ref mut e) => self.visit_exp(e),
         }
     }
 }
