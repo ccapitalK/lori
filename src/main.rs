@@ -7,6 +7,7 @@ use std::io::Read;
 mod types;
 mod lex;
 mod parse;
+use types::Parseable;
 
 fn main() {
     let mut data = Vec::new();
@@ -15,5 +16,6 @@ fn main() {
         f.read_to_end(&mut data).unwrap();
     }
     let tokens = lex::tokenify_string(data.as_slice()).unwrap();
-    println!("{:?}", tokens);
+    let parsed = types::Chunk::parse(&tokens).unwrap();
+    println!("{:?}", parsed);
 }

@@ -190,6 +190,11 @@ impl_parse!(Args, alt!(
             (Args::ExpList(Box::new(el)))
         ) |
         do_parse!(
+            le_tag!(LexicalElement::OpenParen) >>
+            le_tag!(LexicalElement::CloseParen) >>
+            (Args::Empty)
+        ) |
+        do_parse!(
             tc: call!(TableConstructor::parse) >>
             (Args::TableConstructor(Box::new(tc)))
         ) |
