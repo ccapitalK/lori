@@ -1,5 +1,5 @@
 use nom::*;
-use std::str;
+use std::{str, mem};
 use types::*;
 
 // --------------- Some Helper Macros ------------------
@@ -337,8 +337,6 @@ impl_parse!(Exp, alt!(
                   (Exp::SimpleExp(Box::new(se))))     
     ));
 
-// TODO: Resolve the precedence heirarchy in the Exp tree at some point
-
 impl_parse!(VarOrExp, alt!(
         do_parse!(
             var: call!(Var::parse) >>
@@ -485,8 +483,13 @@ impl_parse!(LastStat, alt!(
         le_tag!(LexicalElement::Keyword("break") => LastStat::Break) |
         do_parse!(
             le_tag!(LexicalElement::Keyword("return")) >>
-            es: call!(ExpList::parse) >>
-            (LastStat::Return(Box::new(es)))
+            es: opt!(call!(ExpList::parse)) >>
+            (
+                match es {
+                    Some(es) => LastStat::Return(Box::new(es)),
+                    None => LastStat::Return(Box::new(ExpList(Vec::new()))),
+                }
+            )
         )
     ));
 
@@ -508,26 +511,841 @@ impl_parse!(Chunk, do_parse!(
         (Chunk(ss, ls))
     ));
 
-#[test]
-fn test_parser() {
-    use lex::tokenify_string;
-    //let input = b"\"Hello world\"";
-    //use std::mem::size_of;
-    //println!("{}", size_of::<Field>());
-    {
-        let input = b"4.0 + - nil ^ nil";
-        let input = tokenify_string(&input[..]).unwrap();
-        let (_, output) = Exp::parse(&input).unwrap();
-        let expected =
-             Exp::BinaryOp(
-                 Box::new(Exp::SimpleExp(Box::new(SimpleExp::Number(4.0)))),
-                 BinOp::Plus,
-                 Box::new(Exp::UnaryOp(UnOp::Neg, Box::new(Exp::BinaryOp(
-                     Box::new(Exp::SimpleExp(Box::new(SimpleExp::Nil))),
-                     BinOp::Pow,
-                     Box::new(Exp::SimpleExp(Box::new(SimpleExp::Nil)))
-                 ))))
-             ); 
-        assert_eq!(expected, output);
+#[derive(Default)]
+struct ExpBalanceVisitor;
+
+macro_rules! move_out {
+    ($p:expr => $e:ident => $me:ident, $b:block) => {{
+        let mut $me = mem::replace($e, $p);
+        let r = $b;
+        mem::swap(&mut $me, $e);
+        r
+    }};
+}
+
+use self::LeftOrRight::{Left, Right};
+use std::cmp::Ord;
+use std::cmp::Ordering::*;
+
+impl ExpBalanceVisitor {
+    fn move_unary_op_down(&mut self, e: Exp, uo: UnOp) -> Exp {
+        match e {
+            Exp::BinaryOp(e1, bo, e2) => {
+                if UnOp::precedence() > bo.precedence() {
+                    Exp::BinaryOp(Box::new(self.move_unary_op_down(*e1, uo)), bo, e2)
+                } else {
+                    Exp::UnaryOp(uo, Box::new(Exp::BinaryOp(e1, bo, e2)))
+                }
+            },
+            e => Exp::UnaryOp(uo, Box::new(e)),
+        }
+    }
+    fn descend_binary_op_on_right(&mut self, e: Exp, bo: BinOp, re: Exp) -> Exp {
+        let mut recurse_right = |e, bo, re| {
+            match e {
+                Exp::BinaryOp(ile, ibo, ire) => Exp::BinaryOp(
+                    ile, 
+                    ibo, 
+                    Box::new(self.descend_binary_op_on_right(*ire, bo, re))
+                ),
+                Exp::UnaryOp(iuo, ire) => Exp::UnaryOp(
+                    iuo, 
+                    Box::new(self.descend_binary_op_on_right(*ire, bo, re))
+                ),
+                _ => unreachable!(),
+            }
+        };
+        match bo.precedence().cmp(&e.precedence()) {
+            Greater => recurse_right(e, bo, re),
+            Equal => if bo.associativity() == Right {
+                recurse_right(e, bo, re)
+            } else {
+                Exp::BinaryOp(Box::new(e), bo, Box::new(re))
+            },
+            Less => Exp::BinaryOp(Box::new(e), bo, Box::new(re)),
+        }
+    }
+    fn descend_binary_op_on_left(&mut self, e: Exp, bo: BinOp, le: Exp) -> Exp {
+        let mut recurse_left = |e, bo, le| {
+            match e {
+                Exp::BinaryOp(ile, ibo, ire) => Exp::BinaryOp(
+                    Box::new(self.descend_binary_op_on_left(*ile, bo, le)),
+                    ibo, 
+                    ire
+                ), 
+                e@Exp::UnaryOp(_, _) => Exp::BinaryOp(Box::new(le), bo, Box::new(e)),
+                _ => unreachable!(),
+            }
+        };
+        match bo.precedence().cmp(&e.precedence()) {
+            Greater => recurse_left(e, bo, le),
+            Equal => if bo.associativity() == Left {
+                recurse_left(e, bo, le)
+            } else {
+                Exp::BinaryOp(Box::new(le), bo, Box::new(e))
+            },
+            Less => Exp::BinaryOp(Box::new(le), bo, Box::new(e)),
+        }
+    }
+    // This is gonna be awful from a performance perspective, but I had no idea 
+    // how else to do this
+    fn  destructure_left_subtree(&mut self, e: Exp, precedence: u8) -> (Exp, Box<FnMut(Exp) -> Exp>) {
+        match e {
+            e@Exp::SimpleExp(_) | e@Exp::UnaryOp(_, _) => {
+                (e, Box::new(move |e: Exp| e))
+            }
+            Exp::BinaryOp(le, op, re) => {
+                macro_rules! descend_left {
+                    () => {{
+                        let mut re = Some(re);
+                        let (ie, mut ifn) = self.destructure_left_subtree(*le, precedence);
+                        (ie, Box::new(move |pe: Exp| {
+                            Exp::BinaryOp(
+                                Box::new(ifn(pe)),
+                                op,
+                                re.take().unwrap()
+                            )
+                        }))
+                    }};
+                }
+                match op.precedence().cmp(&precedence) {
+                    Less => descend_left!(),
+                    Equal if op.associativity() == Left => descend_left!(),
+                    _ => {
+                        (
+                            Exp::BinaryOp(le, op, re), 
+                            Box::new(move |e: Exp| e)
+                        )
+                    }
+                }
+            }
+        }
+    }
+    fn destructure_right_subtree(&mut self, e: Exp, precedence: u8) -> (Exp, Box<FnMut(Exp) -> Exp>) {
+        match e {
+            e@Exp::SimpleExp(_) => {
+                (e, Box::new(move |e: Exp| e))
+            }
+            Exp::UnaryOp(uo, ie) => {
+                match UnOp::precedence().cmp(&precedence) {
+                    Greater => {
+                        let (ie, mut ifn) = self.destructure_right_subtree(*ie, precedence);
+                        (ie, Box::new(move |pe: Exp| {
+                            Exp::UnaryOp(
+                                uo,
+                                Box::new(ifn(pe)),
+                            )
+                        }))
+                    },
+                    Equal => unreachable!(),
+                    Less => (Exp::UnaryOp(uo, ie), Box::new(move |e: Exp| e)),
+
+                }
+            }
+            Exp::BinaryOp(le, op, re) => {
+                macro_rules! descend_right {
+                    () => {{
+                        let mut le = Some(le);
+                        let (ie, mut ifn) = self.destructure_right_subtree(*re, precedence);
+                        (ie, Box::new(move |pe: Exp| {
+                            Exp::BinaryOp(
+                                le.take().unwrap(),
+                                op,
+                                Box::new(ifn(pe))
+                            )
+                        }))
+                    }};
+                }
+                match op.precedence().cmp(&precedence) {
+                    Less => descend_right!(),
+                    Equal if op.associativity() == Right => descend_right!(),
+                    _ => {
+                        (
+                            Exp::BinaryOp(le, op, re), 
+                            Box::new(move |e: Exp| e)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl ASTVisitor<u8> for ExpBalanceVisitor {
+    fn visit_exp(&mut self, e: &mut Exp) -> Option<u8> {
+        let default_exp = || Exp::SimpleExp(Box::new(SimpleExp::Nil));
+        move_out!(default_exp() => e => me, {
+            let ep = me.precedence();
+            me = match me {
+                Exp::SimpleExp(mut se) => {
+                    self.visit_simple_exp(se.as_mut());
+                    Exp::SimpleExp(se)
+                },
+                Exp::UnaryOp(op, mut ce) => {
+                    self.move_unary_op_down(*ce, op)
+                },
+                Exp::BinaryOp(mut ce1, op, mut ce2) => {
+                    let ce1p = self.visit_exp(ce1.as_mut()).unwrap();
+                    let ce2p = self.visit_exp(ce2.as_mut()).unwrap();
+                    let comparisons = (ep.cmp(&ce1p), ep.cmp(&ce2p));
+                    if comparisons == (Greater, Greater) {
+                        let bottom_side = match ce1p.cmp(&ce2p) {
+                            Greater => {
+                                Left
+                            },
+                            Equal => {
+                                ce1.associativity().unwrap_or(Left)
+                            },
+                            Less => {
+                                Right
+                            },
+                        };
+                        let (ce1, mut lf) = self.destructure_right_subtree(*ce1, ep);
+                        let (ce2, mut rf) =  self.destructure_left_subtree(*ce2, ep);
+                        let bottom_exp = Exp::BinaryOp(Box::new(ce1), op, Box::new(ce2));
+                        match bottom_side {
+                            Left  => rf(lf(bottom_exp)),
+                            Right => lf(rf(bottom_exp)),
+                        }
+                    } else {
+                        let descend_dir = {
+                            match comparisons {
+                                (Greater, Greater) => unreachable!(),
+                                (Equal, Greater) => Some(Right),
+                                (Less, Greater) => Some(Right),
+                                (Greater, Equal) => Some(Left),
+                                (Equal, Equal) => Some(op.associativity().invert()),
+                                (Less, Equal) => if op.associativity() == Left {
+                                    Some(Right)
+                                } else {
+                                    None
+                                },
+                                (Greater, Less) => Some(Left),
+                                (Equal, Less) => if op.associativity() == Right {
+                                    Some(Left)
+                                } else {
+                                    None
+                                },
+                                (Less, Less) => None,
+                            }
+                        };
+                        match descend_dir {
+                            Some(Left) => {
+                                self.descend_binary_op_on_right(*ce1, op, *ce2)
+                            },
+                            Some(Right) => {
+                                self.descend_binary_op_on_left(*ce2, op, *ce1)
+                            },
+                            None => Exp::BinaryOp(ce1, op, ce2),
+                        }
+                    }
+                },
+            };
+            Some(me.precedence())
+        })
+    }
+}
+
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct ParseError;
+
+pub fn parse_chunk(input: &[LexicalElement]) -> Result<Chunk, ParseError> {
+    let (_, mut parsed) = match Chunk::parse(input) {
+        IResult::Done(np, mut p) => (np, p),
+        _ => return Err(ParseError),
+    };
+    let mut ebv = ExpBalanceVisitor::default();
+    ebv.visit_chunk(&mut parsed);
+    Ok(parsed)
+}
+
+#[allow(dead_code)]
+fn parse_exp(input: &[LexicalElement]) -> Result<Exp, ParseError> {
+    let (_, mut parsed) = match Exp::parse(input) {
+        IResult::Done(np, mut p) => (np, p),
+        _ => return Err(ParseError),
+    };
+    let mut ebv = ExpBalanceVisitor::default();
+    ebv.visit_exp(&mut parsed);
+    Ok(parsed)
+}
+
+#[cfg(test)]
+mod tests {
+    use types::*;
+    use super::*;
+
+    macro_rules! tree {
+        (+, $a:expr, $b:expr) => (Exp::BinaryOp(
+            Box::new($a),
+            BinOp::Plus,
+            Box::new($b)
+        ));
+        (-, $a:expr, $b:expr) => (Exp::BinaryOp(
+            Box::new($a),
+            BinOp::Minus,
+            Box::new($b)
+        ));
+        (*, $a:expr, $b:expr) => (Exp::BinaryOp(
+            Box::new($a),
+            BinOp::Mult,
+            Box::new($b)
+        ));
+        (/, $a:expr, $b:expr) => (Exp::BinaryOp(
+            Box::new($a),
+            BinOp::Div,
+            Box::new($b)
+        ));
+        (^, $a:expr, $b:expr) => (Exp::BinaryOp(
+            Box::new($a),
+            BinOp::Pow,
+            Box::new($b)
+        ));
+        (%, $a:expr, $b:expr) => (Exp::BinaryOp(
+            Box::new($a),
+            BinOp::Mod,
+            Box::new($b)
+        ));
+        (<, $a:expr, $b:expr) => (Exp::BinaryOp(
+            Box::new($a),
+            BinOp::LessThan,
+            Box::new($b)
+        ));
+        (>, $a:expr, $b:expr) => (Exp::BinaryOp(
+            Box::new($a),
+            BinOp::GreaterThan,
+            Box::new($b)
+        ));
+        (=, $a:expr, $b:expr) => (Exp::BinaryOp(
+            Box::new($a),
+            BinOp::Equals,
+            Box::new($b)
+        ));
+        (.., $a:expr, $b:expr) => (Exp::BinaryOp(
+            Box::new($a),
+            BinOp::Concat,
+            Box::new($b)
+        ));
+        (<=, $a:expr, $b:expr) => (Exp::BinaryOp(
+            Box::new($a),
+            BinOp::LessEqual,
+            Box::new($b)
+        ));
+        (>=, $a:expr, $b:expr) => (Exp::BinaryOp(
+            Box::new($a),
+            BinOp::GreaterEqual,
+            Box::new($b)
+        ));
+        (!=, $a:expr, $b:expr) => (Exp::BinaryOp(
+            Box::new($a),
+            BinOp::NotEquals,
+            Box::new($b)
+        ));
+        (&&, $a:expr, $b:expr) => (Exp::BinaryOp(
+            Box::new($a),
+            BinOp::And,
+            Box::new($b)
+        ));
+        (||, $a:expr, $b:expr) => (Exp::BinaryOp(
+            Box::new($a),
+            BinOp::Or,
+            Box::new($b)
+        ));
+        (-, $e:expr) => (Exp::UnaryOp(
+            UnOp::Neg,
+            Box::new($e)
+        ));
+        (!, $e:expr) => (Exp::UnaryOp(
+            UnOp::Not,
+            Box::new($e)
+        ));
+        (#, $e:expr) => (Exp::UnaryOp(
+            UnOp::Len,
+            Box::new($e)
+        ));
+        ($e:expr) => (Exp::SimpleExp(Box::new(SimpleExp::Number($e))));
+        () => (Exp::SimpleExp(Box::new(SimpleExp::Nil)));
+    }
+
+    fn fix_exp_tree(e: &mut Exp) {
+        let mut ebv = ExpBalanceVisitor;
+        ebv.visit_exp(e);
+    }
+
+    macro_rules! assert_transform {
+        ($a:expr, $b:expr) => {{
+            let mut a = $a;
+            fix_exp_tree(&mut a);
+            assert_eq!(a, $b);
+        }};
+    }
+
+    #[test]
+    fn test_exp_balancer() {
+        //{
+        //    let mut et = tree!(+, tree!(||, tree!(), tree!()), tree!());
+        //    println!("Before:\n{:#?}", et);
+        //    fix_exp_tree(&mut et);
+        //    println!("After:\n{:#?}", et);
+        //}
+        
+        //"nil"
+        assert_transform!(
+            tree!(
+            ),
+            tree!(
+            )
+        );
+
+        //"# 1.0 + 2.0"
+        assert_transform!(
+            tree!(
+                #, 
+                tree!(
+                    +, 
+                    tree!(1.), 
+                    tree!(2.)
+                )
+            ),
+            tree!(
+                +,
+                tree!(
+                    #, 
+                    tree!(1.)
+                ),
+                tree!(2.)
+            )
+        );
+
+        //"1.0 || 2.0 + 3.0"
+        assert_transform!(
+            tree!(
+                +,
+                tree!(
+                    ||,
+                    tree!(1.),
+                    tree!(2.)
+                ),
+                tree!(3.)
+            ),
+            tree!(
+                ||,
+                tree!(1.),
+                tree!(
+                    +,
+                    tree!(2.),
+                    tree!(3.)
+                )
+            )
+        );
+        
+        //"-1.0 ^ 2.0"
+        assert_transform!(
+            tree!(
+                ^,
+                tree!(
+                    -,
+                    tree!(1.)
+                ),
+                tree!(2.)
+            ),
+            tree!(
+                -,
+                tree!(
+                    ^,
+                    tree!(1.),
+                    tree!(2.)
+                )
+            )
+        );
+
+        //"-1.0 + 2.0"
+        assert_transform!(
+            tree!(
+                -,
+                tree!(
+                    +,
+                    tree!(1.),
+                    tree!(2.)
+                )
+            ),
+            tree!(
+                +,
+                tree!(
+                    -,
+                    tree!(1.)
+                ),
+                tree!(2.)
+            )
+        );
+
+        //"1.0 + 2.0 - 3.0"
+        assert_transform!(
+            tree!(
+                +,
+                tree!(1.),
+                tree!(
+                    -,
+                    tree!(2.),
+                    tree!(3.)
+                )
+            ),
+            tree!(
+                -,
+                tree!(
+                    +,
+                    tree!(1.),
+                    tree!(2.)
+                ),
+                tree!(3.)
+            )
+        );
+        
+        //"1.0 + 2.0 .. 3.0 .. 4.0"
+        assert_transform!(
+            tree!(
+                ..,
+                tree!(
+                    +,
+                    tree!(1.),
+                    tree!(2.)
+                ),
+                tree!(
+                    ..,
+                    tree!(3.),
+                    tree!(4.)
+                )
+            ),
+            tree!(
+                ..,
+                tree!(
+                    +,
+                    tree!(1.),
+                    tree!(2.)
+                ),
+                tree!(
+                    ..,
+                    tree!(3.),
+                    tree!(4.)
+                )
+            )
+        );
+
+        //"1.0 .. 2.0 .. 3.0"
+        assert_transform!(
+            tree!(
+                ..,
+                tree!(
+                    ..,
+                    tree!(1.),
+                    tree!(2.)
+                ),
+                tree!(3.)
+            ),
+            tree!(
+                ..,
+                tree!(1.),
+                tree!(
+                    ..,
+                    tree!(2.),
+                    tree!(3.)
+                )
+            )
+        );
+
+        //"1.0 + 2.0 + 3.0"
+        assert_transform!(
+            tree!(
+                +,
+                tree!(
+                    +,
+                    tree!(1.),
+                    tree!(2.)
+                ),
+                tree!(3.)
+            ),
+            tree!(
+                +,
+                tree!(
+                    +,
+                    tree!(1.),
+                    tree!(2.)
+                ),
+                tree!(3.)
+            )
+        );
+
+        //"1.0 + 2.0 + 3.0 + 4.0"
+        assert_transform!(
+            tree!(
+                +,
+                tree!(
+                    +,
+                    tree!(1.),
+                    tree!(2.)
+                ),
+                tree!(
+                    +,
+                    tree!(3.),
+                    tree!(4.)
+                )
+            ),
+            tree!(
+                +,
+                tree!(
+                    +,
+                    tree!(
+                        +,
+                        tree!(1.),
+                        tree!(2.)
+                    ),
+                    tree!(3.)
+                ),
+                tree!(4.)
+            )
+        );
+
+        //"1.0 .. 2.0 .. 3.0 .. 4.0"
+        assert_transform!(
+            tree!(
+                ..,
+                tree!(
+                    ..,
+                    tree!(1.),
+                    tree!(2.)
+                ),
+                tree!(
+                    ..,
+                    tree!(3.),
+                    tree!(4.)
+                )
+            ),
+            tree!(
+                ..,
+                tree!(1.),
+                tree!(
+                    ..,
+                    tree!(2.),
+                    tree!(
+                        ..,
+                        tree!(3.),
+                        tree!(4.)
+                    )
+                )
+            )
+        );
+
+        //"- 1.0 ^ 2.0 ^ 3.)"
+        assert_transform!(
+            tree!(
+                ^,
+                tree!(
+                    -,
+                    tree!(1.)
+                ),
+                tree!(
+                    ^,
+                    tree!(2.),
+                    tree!(3.)
+                )
+            ),
+            tree!(
+                -,
+                tree!(
+                    ^,
+                    tree!(1.),
+                    tree!(
+                        ^,
+                        tree!(2.),
+                        tree!(3.)
+                    )
+                )
+            )
+        );
+
+        //"1.0 + 2.0 ^ 3.0 + 4.0"
+        assert_transform!(
+            tree!(
+                ^,
+                tree!(
+                    +,
+                    tree!(1.),
+                    tree!(2.)
+                ),
+                tree!(
+                    +,
+                    tree!(3.),
+                    tree!(4.)
+                )
+            ),
+            tree!(
+                +,
+                tree!(
+                    +,
+                    tree!(1.),
+                    tree!(
+                        ^,
+                        tree!(2.),
+                        tree!(3.)
+                    )
+                ),
+                tree!(4.)
+            )
+        );
+
+        //"1.0 .. 2.0 ^ 3.0 .. 4.0"
+        assert_transform!(
+            tree!(
+                ^,
+                tree!(
+                    ..,
+                    tree!(1.),
+                    tree!(2.)
+                ),
+                tree!(
+                    ..,
+                    tree!(3.),
+                    tree!(4.)
+                )
+            ),
+            tree!(
+                ..,
+                tree!(1.),
+                tree!(
+                    ..,
+                    tree!(
+                        ^,
+                        tree!(2.),
+                        tree!(3.)
+                    ),
+                    tree!(4.)
+                )
+            )
+        );
+
+        //"1.0 * 2.0 ^ 3.0 + 4.0"
+        assert_transform!(
+            tree!(
+                ^,
+                tree!(
+                    *,
+                    tree!(1.),
+                    tree!(2.)
+                ),
+                tree!(
+                    +,
+                    tree!(3.),
+                    tree!(4.)
+                )
+            ),
+            tree!(
+                +,
+                tree!(
+                    *,
+                    tree!(1.),
+                    tree!(
+                        ^,
+                        tree!(2.),
+                        tree!(3.)
+                    )
+                ),
+                tree!(4.)
+            )
+        );
+
+        //"1.0 + 2.0 ^ 3.0 * 4.0"
+        assert_transform!(
+            tree!(
+                ^,
+                tree!(
+                    +,
+                    tree!(1.),
+                    tree!(2.)
+                ),
+                tree!(
+                    *,
+                    tree!(3.),
+                    tree!(4.)
+                )
+            ),
+            tree!(
+                +,
+                tree!(1.),
+                tree!(
+                    *,
+                    tree!(
+                        ^,
+                        tree!(2.),
+                        tree!(3.)
+                    ),
+                    tree!(4.)
+                )
+            )
+        );
+    }
+
+    #[test]
+    fn test_parser() {
+        use lex::tokenify_string;
+        {
+            let input = b"4.0 + - nil ^ nil";
+            let input = tokenify_string(&input[..]).unwrap();
+            let (_, output) = Exp::parse(&input).unwrap();
+            let expected =
+                tree!(
+                    +,
+                    tree!(4.0),
+                    tree!(
+                        -,
+                        tree!(
+                            ^,
+                            tree!(),
+                            tree!()
+                        )
+                    )
+                );
+            assert_eq!(expected, output);
+        }
+        {
+            let input = tokenify_string(b"a = # 4 ^ 3").unwrap();
+            {
+                let (_, output) = Chunk::parse(&input).unwrap();
+                println!("Before exp rotations: {:?}", output);
+                let output = parse_chunk(&input).unwrap();
+                println!("After exp rotations: {:?}", output);
+            }
+        }
+        {
+            let (_, exp) = Exp::parse(
+                &tokenify_string(b"4 + 4 ^ 4 + 4").unwrap()).unwrap();
+            assert_eq!(exp, tree!(+, tree!(4.0), tree!(^, tree!(4.0), 
+                tree!(+, tree!(4.0), tree!(4.0)))));
+        }
+        //use std::mem::size_of;
+        //println!("UnOp: {}"                      ,  size_of::<UnOp            >());        
+        //println!("BinOp: {}"                     ,  size_of::<BinOp           >());        
+        //println!("FieldSep: {}"                  ,  size_of::<FieldSep        >());           
+        //println!("SimpleExp: {}"                 ,  size_of::<SimpleExp       >());            
+        //println!("PrefixExp: {}"                 ,  size_of::<PrefixExp       >());            
+        //println!("Exp: {}"                       ,  size_of::<Exp             >());      
+        //println!("Field: {}"                     ,  size_of::<Field           >());        
+        //println!("TableConstructor: {}"          ,  size_of::<TableConstructor>());                   
+        //println!("NameList: {}"                  ,  size_of::<NameList        >());           
+        //println!("ParList: {}"                   ,  size_of::<ParList         >());          
+        //println!("FuncName: {}"                  ,  size_of::<FuncName        >());           
+        //println!("ExpList: {}"                   ,  size_of::<ExpList         >());          
+        //println!("Args: {}"                      ,  size_of::<Args            >());       
+        //println!("Function: {}"                  ,  size_of::<Function        >());           
+        //println!("FuncBody: {}"                  ,  size_of::<FuncBody        >());           
+        //println!("FunctionCall: {}"              ,  size_of::<FunctionCall    >());               
+        //println!("Var: {}"                       ,  size_of::<Var             >());      
+        //println!("VarList: {}"                   ,  size_of::<VarList         >());          
+        //println!("Stat: {}"                      ,  size_of::<Stat            >());       
+        //println!("LastStat: {}"                  ,  size_of::<LastStat        >());           
+        //println!("Chunk: {}"                     ,  size_of::<Chunk           >());        
+        //println!("NameAndArgs: {}"               ,  size_of::<NameAndArgs     >());              
+        //println!("VarSuffix: {}"                 ,  size_of::<VarSuffix       >());            
+        //println!("VarOrExp: {}"                  ,  size_of::<VarOrExp        >());           
     }
 }

@@ -40,14 +40,35 @@ pub trait Parseable : Sized {
         -> IResult<&'a[LexicalElement<'b>], Self>;
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum LeftOrRight {
+    Left,
+    Right
+}
+
+impl LeftOrRight {
+    pub fn invert(self) -> Self {
+        match self {
+            LeftOrRight::Left => LeftOrRight::Right,
+            LeftOrRight::Right => LeftOrRight::Left,
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum UnOp {
     Neg,
     Not,
     Len
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl UnOp {
+    pub fn precedence() -> u8 {
+        7
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum BinOp {
     Plus,
     Minus,
@@ -67,18 +88,25 @@ pub enum BinOp {
 }
 
 impl BinOp {
-    // greater precedence means evaluated first
-    fn precedence(&self) -> u8 {
+    // greater precedence means evaluated first (ie. closer to being a leaf
+    // of the exp tree)
+    pub fn precedence(&self) -> u8 {
         match *self {
-            BinOp::Or => 0,
-            BinOp::And => 1,
+            BinOp::Or => 1,
+            BinOp::And => 2,
             BinOp::LessThan | BinOp::LessEqual | 
                 BinOp::Equals | BinOp::NotEquals | 
-                BinOp::GreaterThan | BinOp::GreaterEqual => 2,
-            BinOp::Concat => 3,
-            BinOp::Plus | BinOp::Minus => 4,
-            BinOp::Mult | BinOp::Div | BinOp::Mod => 5,
-            BinOp::Pow => 7,
+                BinOp::GreaterThan | BinOp::GreaterEqual => 3,
+            BinOp::Concat => 4,
+            BinOp::Plus | BinOp::Minus => 5,
+            BinOp::Mult | BinOp::Div | BinOp::Mod => 6,
+            BinOp::Pow => 8,
+        }
+    }
+    pub fn associativity(&self) -> LeftOrRight {
+        match *self {
+            BinOp::Concat | BinOp::Pow => LeftOrRight::Right,
+            _ => LeftOrRight::Left,
         }
     }
 }
@@ -109,6 +137,23 @@ pub enum Exp {
     SimpleExp(Box<SimpleExp>),
     UnaryOp(UnOp, Box<Exp>),
     BinaryOp(Box<Exp>, BinOp, Box<Exp>),
+}
+
+impl Exp {
+    pub fn precedence(&self) -> u8 {
+        match self {
+            &Exp::SimpleExp(_) => 9,
+            &Exp::UnaryOp(_, _) => UnOp::precedence(),
+            &Exp::BinaryOp(_, ref o, _) => o.precedence(),
+        }
+    }
+    pub fn associativity(&self) -> Option<LeftOrRight> {
+        match self {
+            &Exp::SimpleExp(_) => None,
+            &Exp::UnaryOp(_, _) => None,
+            &Exp::BinaryOp(_, ref o, _) => Some(o.associativity()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
