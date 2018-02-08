@@ -136,7 +136,7 @@ named!(parse_comment<LexicalElement>, do_parse!(
         alt!(
             call!(parse_multiline_string) |
             do_parse!(
-                is_not!("\n") >>
+                opt!(is_not!("\n")) >>
                 e: alt!(
                     eof!() |
                     tag!("\n")

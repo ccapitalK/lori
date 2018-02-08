@@ -1,7 +1,7 @@
 , ... .. . + - * / % ^ # ( ) { } [ ] ; : <= < == = >= >
 -- this shouldn't appear
 and --[[ neither should 
-this ]]-- break do else elseif end false for function if in local nil not or repeat return then true until while
+this ]] break do else elseif end false for function if in local nil not or repeat return then true until while
 
 --[[ TODO:
     Nothing :)
@@ -10,7 +10,7 @@ this ]]-- break do else elseif end false for function if in local nil not or rep
 hello
 
 waldo7
- 7wait
+ 7 wait
 
 8.0
 
