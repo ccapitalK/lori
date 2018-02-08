@@ -131,29 +131,21 @@ fn parse_identifier(input: &[u8]) -> IResult<&[u8], LexicalElement> {
     )
 }
 
-pub fn parse_comment(input: &[u8]) -> IResult<&[u8], LexicalElement> {
-    if input.len() < 2 || &input[..2] != b"--" {
-        return IResult::Error(ErrorKind::IsNot);
-    }
-    let (mut i, in_ml) = if input.len() >= 4 && &input[..4] == b"--[[" {
-        (4, true)
-    } else {
-        (2, false)
-    };
-    while i < input.len() {
-        if in_ml {
-            if i < input.len() - 3 && &input[i..i+4] == b"]]--" {
-                return IResult::Done(&input[i+4..], LexicalElement::Comment);
-            }
-        } else {
-            if input[i] == b'\n' {
-                return IResult::Done(&input[i+1..], LexicalElement::Comment);
-            }
-        }
-        i += 1;
-    }
-    IResult::Error(ErrorKind::IsNot)
-}
+named!(parse_comment<LexicalElement>, do_parse!(
+        tag!("--") >>
+        alt!(
+            call!(parse_multiline_string) |
+            do_parse!(
+                is_not!("\n") >>
+                e: alt!(
+                    eof!() |
+                    tag!("\n")
+                ) >>
+                (LexicalElement::Comment)
+            )
+        ) >>
+        (LexicalElement::Comment)
+    ));
 
 //  TODO: handle edge cases in string literals
 //  - conversion between string data and actual escaped strings
@@ -166,7 +158,7 @@ pub fn parse_comment(input: &[u8]) -> IResult<&[u8], LexicalElement> {
 //  TODO: You know what, redo this whole thing,
 //      a bunch of stuff needs to be reconsidered from an 
 //      architectural perspective anyway (how would error messages be implemented?
-named!(parse_buffer<Vec<LexicalElement>>, ws!(many0!(alt!( 
+named!(pub lex_buffer<Vec<LexicalElement>>, ws!(many0!(alt!( 
        parse_identifier |
        parse_number |
        parse_comment |
@@ -201,7 +193,7 @@ named!(parse_buffer<Vec<LexicalElement>>, ws!(many0!(alt!(
        ))));
 
 pub fn tokenify_string(data: &[u8]) -> Result<Vec<LexicalElement>,()> {
-    match parse_buffer(data) {
+    match lex_buffer(data) {
         IResult::Done(_, v) => Ok(v.into_iter().filter(|ref mut x| **x != LexicalElement::Comment)
                                   .collect()),
         _ => Err(()),
@@ -230,7 +222,7 @@ fn test_lexer() {
         Keyword("not"), Keyword("or"), Keyword("repeat"), Keyword("return"),
         Keyword("then"), Keyword("true"), Keyword("until"), Keyword("while"),
         Identifier("hello"), Identifier("waldo7"), Number("7"), 
-        Identifier("wait"), Number("8.0")
+        Identifier("wait"), Number("8.0"), StringLiteral("Hello")
     ];
 
     match tokens.len().cmp(&expected.len()) {

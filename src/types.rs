@@ -216,7 +216,7 @@ pub enum Stat{
     ForInBlock(Box<NameList>, Box<ExpList>, Box<Chunk>),
     FunctionDec(FuncName, Box<FuncBody>),
     LocalFunctionDec(String, Box<FuncBody>),
-    LocalAssign(Box<NameList>, Option<ExpList>),
+    LocalAssign(Box<NameList>, ExpList),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -440,10 +440,8 @@ pub trait ASTVisitor<T> {
                 for n in nl.0.iter_mut() {
                     self.visit_name(n);
                 }
-                if let &mut Some(ref mut el) = el {
-                    for e in el.0.iter_mut() {
-                        self.visit_exp(e);
-                    }
+                for e in el.0.iter_mut() {
+                    self.visit_exp(e);
                 }
                 None
             },

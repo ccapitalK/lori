@@ -1,6 +1,7 @@
 use nom::*;
 use std::{str, mem};
 use types::*;
+use super::lex;
 
 // --------------- Some Helper Macros ------------------
 
@@ -473,7 +474,11 @@ impl_parse!(Stat, alt!(
                 el: call!(ExpList::parse) >>
                 (el)
             )) >> 
-            (Stat::LocalAssign(Box::new(nl), el))
+            (Stat::LocalAssign(Box::new(nl), (if let Some(el) = el {
+                el
+            } else {
+                ExpList(Vec::new())
+            })))
         )
     ));
 
@@ -748,12 +753,22 @@ impl ASTVisitor<u8> for ExpBalanceVisitor {
 
 
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub struct ParseError;
+pub enum ParseError {
+    Error
+}
 
+#[allow(dead_code)]
+pub fn parse_lua_source(input: &[u8]) -> Result<Chunk, ParseError> {
+    //let tokens = lex::tokenify_string(input).map_err(|_|ParseError::Error)?;
+    let tokens = lex::tokenify_string(input).unwrap();
+    parse_chunk(&tokens)
+}
+
+#[allow(dead_code)]
 pub fn parse_chunk(input: &[LexicalElement]) -> Result<Chunk, ParseError> {
     let (_, mut parsed) = match Chunk::parse(input) {
         IResult::Done(np, mut p) => (np, p),
-        _ => return Err(ParseError),
+        _ => return Err(ParseError::Error),
     };
     let mut ebv = ExpBalanceVisitor::default();
     ebv.visit_chunk(&mut parsed);
@@ -764,7 +779,7 @@ pub fn parse_chunk(input: &[LexicalElement]) -> Result<Chunk, ParseError> {
 fn parse_exp(input: &[LexicalElement]) -> Result<Exp, ParseError> {
     let (_, mut parsed) = match Exp::parse(input) {
         IResult::Done(np, mut p) => (np, p),
-        _ => return Err(ParseError),
+        _ => return Err(ParseError::Error),
     };
     let mut ebv = ExpBalanceVisitor::default();
     ebv.visit_exp(&mut parsed);
@@ -1287,10 +1302,9 @@ mod tests {
 
     #[test]
     fn test_parser() {
-        use lex::tokenify_string;
         {
             let input = b"4.0 + - nil ^ nil";
-            let input = tokenify_string(&input[..]).unwrap();
+            let input = lex::tokenify_string(&input[..]).unwrap();
             let (_, output) = Exp::parse(&input).unwrap();
             let expected =
                 tree!(
@@ -1308,7 +1322,7 @@ mod tests {
             assert_eq!(expected, output);
         }
         {
-            let input = tokenify_string(b"a = # 4 ^ 3").unwrap();
+            let input = lex::tokenify_string(b"a = # 4 ^ 3").unwrap();
             {
                 let (_, output) = Chunk::parse(&input).unwrap();
                 println!("Before exp rotations: {:?}", output);
@@ -1318,7 +1332,7 @@ mod tests {
         }
         {
             let (_, exp) = Exp::parse(
-                &tokenify_string(b"4 + 4 ^ 4 + 4").unwrap()).unwrap();
+                &lex::tokenify_string(b"4 + 4 ^ 4 + 4").unwrap()).unwrap();
             assert_eq!(exp, tree!(+, tree!(4.0), tree!(^, tree!(4.0), 
                 tree!(+, tree!(4.0), tree!(4.0)))));
         }

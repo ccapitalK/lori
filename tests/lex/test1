@@ -4,9 +4,7 @@ and --[[ neither should
 this ]]-- break do else elseif end false for function if in local nil not or repeat return then true until while
 
 --[[ TODO:
-    Identifier
-    StringLiteral
-    Number
+    Nothing :)
 ]]--
 
 hello
@@ -15,3 +13,5 @@ waldo7
  7wait
 
 8.0
+
+[[Hello]]

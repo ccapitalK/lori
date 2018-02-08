@@ -5,3 +5,4 @@ authors = ["Sahan Fernando <sahan.h.fernando@gmail.com>"]
 
 [dependencies]
 nom = "*"
+ordered-float = "0.5.0"
