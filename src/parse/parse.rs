@@ -104,11 +104,11 @@ impl_parse!(SimpleExp, alt!(
     ));
 
 impl_parse!(Field, alt!(
-        do_parse!(v: call!(Exp::parse) >> (Field::Exp(Box::new(v)))) |
         do_parse!(n: le_tag!(LexicalElement::Identifier(s) => s) >> 
                   le_tag!(LexicalElement::Assign) >>
                   v: call!(Exp::parse) >> 
                   (Field::NamedExp(n.to_string(), Box::new(v)))) |
+        do_parse!(v: call!(Exp::parse) >> (Field::Exp(Box::new(v)))) |
         do_parse!(le_tag!(LexicalElement::OpenSquare) >>
                   v1: call!(Exp::parse) >> 
                   le_tag!(LexicalElement::CloseSquare) >>
@@ -898,12 +898,6 @@ mod tests {
 
     #[test]
     fn test_exp_balancer() {
-        //{
-        //    let mut et = tree!(+, tree!(||, tree!(), tree!()), tree!());
-        //    println!("Before:\n{:#?}", et);
-        //    fix_exp_tree(&mut et);
-        //    println!("After:\n{:#?}", et);
-        //}
         
         //"nil"
         assert_transform!(
@@ -1298,6 +1292,72 @@ mod tests {
                 )
             )
         );
+    }
+
+    #[test]
+    fn test_parse_table_constructor() {
+        {
+            let input = lex::tokenify_string(b"5").unwrap();
+            let field = Field::parse(&input).unwrap().1;
+            assert_eq!(
+                field,
+                Field::Exp(Box::new(
+                    Exp::SimpleExp(Box::new(SimpleExp::Number(5.0)))
+                ))
+            );
+        }
+        {
+            let input = lex::tokenify_string(b"[5] = 5").unwrap();
+            let field = Field::parse(&input).unwrap().1;
+            assert_eq!(
+                field,
+                Field::IndexExp(
+                    Box::new(Exp::SimpleExp(Box::new(
+                        SimpleExp::Number(5.0)
+                    ))),
+                    Box::new(Exp::SimpleExp(Box::new(
+                        SimpleExp::Number(5.0)
+                    )))
+                )
+            );
+        }
+        {
+            let input = lex::tokenify_string(b"a = 5").unwrap();
+            let field = Field::parse(&input).unwrap().1;
+            assert_eq!(
+                field,
+                Field::NamedExp(
+                    "a".to_string(),
+                    Box::new(Exp::SimpleExp(Box::new(
+                        SimpleExp::Number(5.0)
+                    )))
+                )
+            );
+        }
+        {
+            let input = lex::tokenify_string(b"local a = {a = 5}").unwrap();
+            let chunk = parse_chunk(&input).unwrap();
+            let expected = Chunk(vec![
+                Stat::LocalAssign(
+                    Box::new(NameList(vec![format!("a")])),
+                    ExpList(vec![
+                        Exp::SimpleExp(Box::new(
+                            SimpleExp::TableConstructor(Box::new(
+                                TableConstructor(vec![
+                                    Field::NamedExp(
+                                        "a".to_string(),
+                                        Box::new(Exp::SimpleExp(Box::new(
+                                            SimpleExp::Number(5.0)
+                                        )))
+                                    )
+                                ])
+                            ))
+                        ))
+                    ])
+                )
+            ], None);
+            assert_eq!(chunk, expected);
+        }
     }
 
     #[test]
