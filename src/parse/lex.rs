@@ -1,6 +1,6 @@
 use nom::*;
 use std::str;
-use types::LexicalElement;
+use ast_types::LexicalElement;
 
 const KEYWORDS: [&str; 21] = [
     "and",
@@ -205,7 +205,7 @@ fn test_lexer() {
     use std::fs::File;
     use std::io::Read;
     use std::cmp::Ordering;
-    use types::LexicalElement::*;
+    use ast_types::LexicalElement::*;
     let mut data = Vec::new();
     {
         let mut f = File::open("tests/lex/test1").unwrap();

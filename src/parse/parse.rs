@@ -1,6 +1,6 @@
 use nom::*;
 use std::{str, mem};
-use types::*;
+use ast_types::*;
 use super::lex;
 
 // --------------- Some Helper Macros ------------------
@@ -788,7 +788,7 @@ fn parse_exp(input: &[LexicalElement]) -> Result<Exp, ParseError> {
 
 #[cfg(test)]
 mod tests {
-    use types::*;
+    use ast_types::*;
     use super::*;
 
     macro_rules! tree {
