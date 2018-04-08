@@ -6,7 +6,7 @@ when it will be feature-complete).
 ## What needs doing
 
 - Migrating the parser and the lexer away from nom (and towards lalrpop)
-- Writing Garbage collector abstraction (Reference counting might work for now, but it will leak when cyclic references occur
+- Writing Garbage collector abstraction (Reference counting might work for now, but it will leak when cyclic references occur)
 - Write Tree-Visiting Interpreter
 - Implement coroutines
 - Implement Lua Tables
