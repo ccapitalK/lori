@@ -6,8 +6,8 @@ use std::fs::File;
 use std::io::Read;
 
 mod ast_types;
-mod parse;
 mod interpreter;
+mod parse;
 
 use ast_types::ASTVisitor;
 use interpreter::Interpreter;

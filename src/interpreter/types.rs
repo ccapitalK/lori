@@ -1,9 +1,9 @@
-use ordered_float;
 use ast_types::FuncBody;
-use std::rc::Rc;
+use ordered_float;
 use std::cell::{Ref, RefCell, RefMut};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum LuaValue {
@@ -24,16 +24,14 @@ impl LuaValue {
             LuaValue::Boolean(b) => format!("{}", b),
             LuaValue::String(b) => b,
             LuaValue::Number(x) => format!("{}", x),
-            _ => unimplemented!()
+            _ => unimplemented!(),
         }
     }
     pub fn to_number(self) -> f64 {
         match self {
             LuaValue::Number(n) => n,
-            LuaValue::String(n) => {
-                str::parse::<f64>(&n).unwrap()
-            }
-            _ => unimplemented!()
+            LuaValue::String(n) => str::parse::<f64>(&n).unwrap(),
+            _ => unimplemented!(),
         }
     }
     pub fn to_bool(self) -> bool {
@@ -46,7 +44,7 @@ impl LuaValue {
     pub fn to_table(self) -> Option<LuaTable> {
         match self {
             LuaValue::Table(lt) => Some(lt),
-            _ => None
+            _ => None,
         }
     }
 }
@@ -73,7 +71,7 @@ impl LuaIndexValue {
                 } else {
                     Ok(LuaIndexValue::Number(ordered_float::NotNaN::from(n)))
                 }
-            },
+            }
             LuaValue::String(s) => Ok(LuaIndexValue::String(s)),
             LuaValue::Function(lf) => Ok(LuaIndexValue::Function(lf)),
             LuaValue::Table(lt) => Ok(LuaIndexValue::Table(lt)),
@@ -85,7 +83,7 @@ impl LuaIndexValue {
 
 #[derive(Clone, Debug, Default)]
 pub struct LuaTable {
-    map: Rc<RefCell<HashMap<LuaIndexValue, LuaValue>>>
+    map: Rc<RefCell<HashMap<LuaIndexValue, LuaValue>>>,
 }
 
 impl Hash for LuaTable {
@@ -96,7 +94,7 @@ impl Hash for LuaTable {
 
 impl PartialEq for LuaTable {
     fn eq(&self, other: &LuaTable) -> bool {
-        self.map.as_ptr() == other.map.as_ptr() 
+        self.map.as_ptr() == other.map.as_ptr()
     }
 }
 
@@ -133,7 +131,7 @@ impl LuaTable {
 
 #[derive(Clone, Debug)]
 pub struct LuaFunction {
-    body: Rc<RefCell<FuncBody>>
+    body: Rc<RefCell<FuncBody>>,
 }
 
 impl Hash for LuaFunction {
@@ -144,7 +142,7 @@ impl Hash for LuaFunction {
 
 impl PartialEq for LuaFunction {
     fn eq(&self, other: &LuaFunction) -> bool {
-        self.body.as_ptr() == other.body.as_ptr() 
+        self.body.as_ptr() == other.body.as_ptr()
     }
 }
 
@@ -153,7 +151,7 @@ impl Eq for LuaFunction {}
 #[derive(Debug)]
 pub enum InterpreterResult {
     LuaValue(LuaValue),
-    Error(String)
+    Error(String),
 }
 
 impl InterpreterResult {

@@ -35,15 +35,14 @@ pub enum LexicalElement<'a> {
 
 use nom::IResult;
 
-pub trait Parseable : Sized {
-    fn parse<'a, 'b>(i: &'a[LexicalElement<'b>]) 
-        -> IResult<&'a[LexicalElement<'b>], Self>;
+pub trait Parseable: Sized {
+    fn parse<'a, 'b>(i: &'a [LexicalElement<'b>]) -> IResult<&'a [LexicalElement<'b>], Self>;
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum LeftOrRight {
     Left,
-    Right
+    Right,
 }
 
 impl LeftOrRight {
@@ -59,7 +58,7 @@ impl LeftOrRight {
 pub enum UnOp {
     Neg,
     Not,
-    Len
+    Len,
 }
 
 impl UnOp {
@@ -84,7 +83,7 @@ pub enum BinOp {
     Equals,
     NotEquals,
     And,
-    Or
+    Or,
 }
 
 impl BinOp {
@@ -94,9 +93,12 @@ impl BinOp {
         match *self {
             BinOp::Or => 1,
             BinOp::And => 2,
-            BinOp::LessThan | BinOp::LessEqual | 
-                BinOp::Equals | BinOp::NotEquals | 
-                BinOp::GreaterThan | BinOp::GreaterEqual => 3,
+            BinOp::LessThan
+            | BinOp::LessEqual
+            | BinOp::Equals
+            | BinOp::NotEquals
+            | BinOp::GreaterThan
+            | BinOp::GreaterEqual => 3,
             BinOp::Concat => 4,
             BinOp::Plus | BinOp::Minus => 5,
             BinOp::Mult | BinOp::Div | BinOp::Mod => 6,
@@ -114,7 +116,7 @@ impl BinOp {
 #[derive(Debug, Clone, PartialEq)]
 pub enum FieldSep {
     Semicolon,
-    Comma
+    Comma,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -160,7 +162,7 @@ impl Exp {
 pub enum Field {
     Exp(Box<Exp>),
     NamedExp(String, Box<Exp>),
-    IndexExp(Box<Exp>, Box<Exp>)
+    IndexExp(Box<Exp>, Box<Exp>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -183,7 +185,7 @@ pub enum Args {
     Empty,
     ExpList(Box<ExpList>),
     TableConstructor(Box<TableConstructor>),
-    StringLiteral(String)
+    StringLiteral(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -196,16 +198,16 @@ pub struct FuncBody(pub Box<ParList>, pub Box<Chunk>);
 pub struct FunctionCall(pub Box<VarOrExp>, pub Vec<NameAndArgs>);
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Var{
+pub enum Var {
     Name(String, Vec<VarSuffix>),
-    Exp(Exp, Vec<VarSuffix>)
+    Exp(Exp, Vec<VarSuffix>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct VarList(pub Vec<Var>);
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Stat{
+pub enum Stat {
     Assign(Box<VarList>, Box<ExpList>),
     FunctionCall(Box<FunctionCall>),
     DoBlock(Box<Chunk>),
@@ -220,9 +222,9 @@ pub enum Stat{
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum LastStat{
+pub enum LastStat {
     Return(Box<ExpList>),
-    Break
+    Break,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -232,13 +234,13 @@ pub struct Chunk(pub Vec<Stat>, pub Option<LastStat>);
 pub struct NameAndArgs(pub Option<String>, pub Args);
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum VarSuffix{
+pub enum VarSuffix {
     Index(Vec<NameAndArgs>, Exp),
     Member(Vec<NameAndArgs>, String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum VarOrExp{
+pub enum VarOrExp {
     Var(Var),
     Exp(Exp),
 }
@@ -274,16 +276,16 @@ pub trait ASTVisitor<T> {
         match pe {
             &mut Exp::SimpleExp(ref mut b) => self.visit_simple_exp(b.as_mut()),
             &mut Exp::UnaryOp(ref mut u, ref mut b) => {
-                self.visit_unary_op(u); 
-                self.visit_exp(b.as_mut()); 
+                self.visit_unary_op(u);
+                self.visit_exp(b.as_mut());
                 None
-            },
+            }
             &mut Exp::BinaryOp(ref mut b1, ref mut bo, ref mut b2) => {
-                self.visit_exp(b1.as_mut()); 
-                self.visit_binary_op(bo); 
-                self.visit_exp(b2.as_mut()); 
+                self.visit_exp(b1.as_mut());
+                self.visit_binary_op(bo);
+                self.visit_exp(b2.as_mut());
                 None
-            }, 
+            }
         }
     }
     fn visit_field(&mut self, f: &mut Field) -> Option<T> {
@@ -293,12 +295,12 @@ pub trait ASTVisitor<T> {
                 self.visit_name(s);
                 self.visit_exp(b.as_mut());
                 None
-            },
-            &mut Field::IndexExp(ref mut b1, ref mut b2) =>{
+            }
+            &mut Field::IndexExp(ref mut b1, ref mut b2) => {
                 self.visit_exp(b1.as_mut());
                 self.visit_exp(b2.as_mut());
                 None
-            },
+            }
         }
     }
     fn visit_table_constructor(&mut self, tc: &mut TableConstructor) -> Option<T> {
@@ -360,16 +362,16 @@ pub trait ASTVisitor<T> {
         match v {
             &mut Var::Name(ref mut n, ref mut vss) => {
                 self.visit_name(n);
-                for vs in vss.iter_mut(){
+                for vs in vss.iter_mut() {
                     self.visit_var_suffix(vs);
                 }
-            },
+            }
             &mut Var::Exp(ref mut e, ref mut vss) => {
                 self.visit_exp(e);
-                for vs in vss.iter_mut(){
+                for vs in vss.iter_mut() {
                     self.visit_var_suffix(vs);
                 }
-            },
+            }
         };
         None
     }
@@ -389,19 +391,19 @@ pub trait ASTVisitor<T> {
                     self.visit_exp(e);
                 }
                 None
-            },
+            }
             &mut Stat::FunctionCall(ref mut fc) => self.visit_function_call(fc.as_mut()),
             &mut Stat::DoBlock(ref mut ch) => self.visit_chunk(ch.as_mut()),
             &mut Stat::WhileBlock(ref mut e, ref mut ch) => {
                 self.visit_exp(e);
                 self.visit_chunk(ch);
                 None
-            },
+            }
             &mut Stat::RepeatBlock(ref mut e, ref mut ch) => {
                 self.visit_exp(e);
                 self.visit_chunk(ch);
                 None
-            },
+            }
             &mut Stat::IfElseBlock(ref mut v, ref mut och) => {
                 for &mut (ref mut e, ref mut ch) in v.iter_mut() {
                     self.visit_exp(e);
@@ -411,7 +413,7 @@ pub trait ASTVisitor<T> {
                     self.visit_chunk(och);
                 }
                 None
-            },
+            }
             &mut Stat::ForRangeBlock(ref mut n, ref mut el, ref mut ch) => {
                 self.visit_name(n);
                 for e in el.iter_mut() {
@@ -419,23 +421,23 @@ pub trait ASTVisitor<T> {
                 }
                 self.visit_chunk(ch.as_mut());
                 None
-            },
+            }
             &mut Stat::ForInBlock(ref mut nl, ref mut el, ref mut ch) => {
                 self.visit_name_list(nl.as_mut());
                 self.visit_exp_list(el.as_mut());
                 self.visit_chunk(ch.as_mut());
                 None
-            },
+            }
             &mut Stat::FunctionDec(ref mut n, ref mut fb) => {
                 self.visit_func_name(n);
                 self.visit_func_body(fb.as_mut());
                 None
-            },
+            }
             &mut Stat::LocalFunctionDec(ref mut n, ref mut fb) => {
                 self.visit_name(n);
                 self.visit_func_body(fb.as_mut());
                 None
-            },
+            }
             &mut Stat::LocalAssign(ref mut nl, ref mut el) => {
                 for n in nl.0.iter_mut() {
                     self.visit_name(n);
@@ -444,7 +446,7 @@ pub trait ASTVisitor<T> {
                     self.visit_exp(e);
                 }
                 None
-            },
+            }
         }
     }
     fn visit_last_stat(&mut self, ls: &mut LastStat) -> Option<T> {
@@ -476,13 +478,13 @@ pub trait ASTVisitor<T> {
                     self.visit_name_and_args(naa);
                 }
                 self.visit_exp(e);
-            },
+            }
             &mut VarSuffix::Member(ref mut naas, ref mut s) => {
                 for naa in naas.iter_mut() {
                     self.visit_name_and_args(naa);
                 }
                 self.visit_name(s);
-            },
+            }
         };
         None
     }

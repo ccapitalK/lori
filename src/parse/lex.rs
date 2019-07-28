@@ -1,35 +1,16 @@
+use ast_types::LexicalElement;
 use nom::*;
 use std::str;
-use ast_types::LexicalElement;
 
 const KEYWORDS: [&str; 21] = [
-    "and",
-    "break",
-    "do",
-    "else",
-    "elseif",
-    "end",
-    "false",
-    "for",
-    "function",
-    "if",
-    "in",
-    "local",
-    "nil",
-    "not",
-    "or",
-    "repeat",
-    "return",
-    "then",
-    "true",
-    "until",
-    "while",
+    "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "if", "in", "local",
+    "nil", "not", "or", "repeat", "return", "then", "true", "until", "while",
 ];
 
 fn parse_multiline_string(input: &[u8]) -> IResult<&[u8], LexicalElement> {
     let mut i = 0;
     {
-        if input.len() <  2 || input[i] != b'[' {
+        if input.len() < 2 || input[i] != b'[' {
             return IResult::Error(ErrorKind::IsNot);
         }
         i += 1;
@@ -44,11 +25,17 @@ fn parse_multiline_string(input: &[u8]) -> IResult<&[u8], LexicalElement> {
     let len = i - 2;
     {
         while i < input.len() - (len + 2) {
-            if input[i] == b']' && input[i+len+1] == b']' && 
-                input[i+1..i+len+1].iter().filter(|&x| x != &b'=').count() == 0 {
-                let out_range = &input[len+2..i];
+            if input[i] == b']'
+                && input[i + len + 1] == b']'
+                && input[i + 1..i + len + 1]
+                    .iter()
+                    .filter(|&x| x != &b'=')
+                    .count()
+                    == 0
+            {
+                let out_range = &input[len + 2..i];
                 let out_token = LexicalElement::StringLiteral(str::from_utf8(out_range).unwrap());
-                return IResult::Done(&input[i+len+2..], out_token);
+                return IResult::Done(&input[i + len + 2..], out_token);
             }
             i += 1;
         }
@@ -64,7 +51,7 @@ fn parse_string_literal(input: &[u8]) -> IResult<&[u8], LexicalElement> {
     while len < input.len() {
         if input[len] == input[0] {
             break;
-        }else if len+1<input.len() && (input[len],input[len+1]) == (b'\\', input[0]) {
+        } else if len + 1 < input.len() && (input[len], input[len + 1]) == (b'\\', input[0]) {
             len += 1;
         }
         len += 1;
@@ -90,13 +77,13 @@ fn parse_number(input: &[u8]) -> IResult<&[u8], LexicalElement> {
     }
     let mut len = 0;
     while len < input.len() && (input[len] as char).is_numeric() {
-        len+=1;
+        len += 1;
     }
     if len < input.len() && input[len] == b'.' {
-        len+=1;
+        len += 1;
     }
     while len < input.len() && (input[len] as char).is_numeric() {
-        len+=1;
+        len += 1;
     }
     if len == 0 {
         IResult::Error(ErrorKind::IsNot)
@@ -131,34 +118,34 @@ fn parse_identifier(input: &[u8]) -> IResult<&[u8], LexicalElement> {
     )
 }
 
-named!(parse_comment<LexicalElement>, do_parse!(
-        tag!("--") >>
-        alt!(
-            call!(parse_multiline_string) |
-            do_parse!(
-                opt!(is_not!("\n")) >>
-                e: alt!(
-                    eof!() |
-                    tag!("\n")
-                ) >>
-                (LexicalElement::Comment)
+named!(
+    parse_comment<LexicalElement>,
+    do_parse!(
+        tag!("--")
+            >> alt!(
+                call!(parse_multiline_string)
+                    | do_parse!(
+                        opt!(is_not!("\n"))
+                            >> e: alt!(eof!() | tag!("\n"))
+                            >> (LexicalElement::Comment)
+                    )
             )
-        ) >>
-        (LexicalElement::Comment)
-    ));
+            >> (LexicalElement::Comment)
+    )
+);
 
 //  TODO: handle edge cases in string literals
 //  - conversion between string data and actual escaped strings
 //  - if first character in multiline is newline, don't add this multiline
 //  TODO: URGENT: handle escapes in string literals
-//  TODO: Identifiers can contain any characters considered 
+//  TODO: Identifiers can contain any characters considered
 //      'alphabetic in the current locale'
 //  TODO: Exponential notation
 //  TODO: hexadecimal double notation (dear lord, why?)
 //  TODO: You know what, redo this whole thing,
-//      a bunch of stuff needs to be reconsidered from an 
+//      a bunch of stuff needs to be reconsidered from an
 //      architectural perspective anyway (how would error messages be implemented?
-named!(pub lex_buffer<Vec<LexicalElement>>, ws!(many0!(alt!( 
+named!(pub lex_buffer<Vec<LexicalElement>>, ws!(many0!(alt!(
        parse_identifier |
        parse_number |
        parse_comment |
@@ -192,49 +179,95 @@ named!(pub lex_buffer<Vec<LexicalElement>>, ws!(many0!(alt!(
        value!(LexicalElement::GreaterThan , tag!(">")) 
        ))));
 
-pub fn tokenify_string(data: &[u8]) -> Result<Vec<LexicalElement>,()> {
+pub fn tokenify_string(data: &[u8]) -> Result<Vec<LexicalElement>, ()> {
     match lex_buffer(data) {
-        IResult::Done(_, v) => Ok(v.into_iter().filter(|ref mut x| **x != LexicalElement::Comment)
-                                  .collect()),
+        IResult::Done(_, v) => Ok(v
+            .into_iter()
+            .filter(|ref mut x| **x != LexicalElement::Comment)
+            .collect()),
         _ => Err(()),
     }
 }
 
 #[test]
 fn test_lexer() {
+    use ast_types::LexicalElement::*;
+    use std::cmp::Ordering;
     use std::fs::File;
     use std::io::Read;
-    use std::cmp::Ordering;
-    use ast_types::LexicalElement::*;
     let mut data = Vec::new();
     {
         let mut f = File::open("tests/lex/test1").unwrap();
         f.read_to_end(&mut data).unwrap();
     }
     let tokens = tokenify_string(data.as_slice()).unwrap();
-    let expected = [Comma, Elipsis, Concat, Dot, Plus, Minus, Mult, Div, 
-        Mod, Caret, Hash, OpenParen, CloseParen, OpenBrace, CloseBrace,
-        OpenSquare, CloseSquare, Semicolon, Colon, LessEqual, LessThan,
-        Equals, Assign, GreaterEqual, GreaterThan, Keyword("and"), 
-        Keyword("break"), Keyword("do"), Keyword("else"), Keyword("elseif"),
-        Keyword("end"), Keyword("false"), Keyword("for"), Keyword("function"),
-        Keyword("if"), Keyword("in"), Keyword("local"), Keyword("nil"),
-        Keyword("not"), Keyword("or"), Keyword("repeat"), Keyword("return"),
-        Keyword("then"), Keyword("true"), Keyword("until"), Keyword("while"),
-        Identifier("hello"), Identifier("waldo7"), Number("7"), 
-        Identifier("wait"), Number("8.0"), StringLiteral("Hello")
+    let expected = [
+        Comma,
+        Elipsis,
+        Concat,
+        Dot,
+        Plus,
+        Minus,
+        Mult,
+        Div,
+        Mod,
+        Caret,
+        Hash,
+        OpenParen,
+        CloseParen,
+        OpenBrace,
+        CloseBrace,
+        OpenSquare,
+        CloseSquare,
+        Semicolon,
+        Colon,
+        LessEqual,
+        LessThan,
+        Equals,
+        Assign,
+        GreaterEqual,
+        GreaterThan,
+        Keyword("and"),
+        Keyword("break"),
+        Keyword("do"),
+        Keyword("else"),
+        Keyword("elseif"),
+        Keyword("end"),
+        Keyword("false"),
+        Keyword("for"),
+        Keyword("function"),
+        Keyword("if"),
+        Keyword("in"),
+        Keyword("local"),
+        Keyword("nil"),
+        Keyword("not"),
+        Keyword("or"),
+        Keyword("repeat"),
+        Keyword("return"),
+        Keyword("then"),
+        Keyword("true"),
+        Keyword("until"),
+        Keyword("while"),
+        Identifier("hello"),
+        Identifier("waldo7"),
+        Number("7"),
+        Identifier("wait"),
+        Number("8.0"),
+        StringLiteral("Hello"),
     ];
 
     match tokens.len().cmp(&expected.len()) {
         Ordering::Less => {
             panic!("Unexpected EOF: Expected {:?}", expected[tokens.len()]);
-        },
+        }
         Ordering::Greater => {
             panic!("Expected EOF: Got {:?}", tokens[expected.len()]);
-        },
-        Ordering::Equal => for (t, e) in tokens.iter().zip(expected.iter()) {
-            if t != e {
-                panic!("Expected {:?}, got {:?}", e, t);
+        }
+        Ordering::Equal => {
+            for (t, e) in tokens.iter().zip(expected.iter()) {
+                if t != e {
+                    panic!("Expected {:?}, got {:?}", e, t);
+                }
             }
         }
     }

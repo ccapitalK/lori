@@ -1,5 +1,5 @@
-pub mod parse;
 mod lex;
+pub mod parse;
 
 pub use self::lex::{lex_buffer, tokenify_string};
 
