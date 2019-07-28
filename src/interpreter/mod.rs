@@ -1,20 +1,27 @@
 #[macro_use]
 mod types;
+mod garbage_collector;
 
+use self::garbage_collector::{GarbageCollector, Gc};
+use self::types::*;
 use ast_types::*;
-use interpreter::types::*;
 use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct Interpreter {
     scopes: Vec<HashMap<String, LuaValue>>,
+    gc: GarbageCollector,
 }
 
 impl Interpreter {
     pub fn new() -> Self {
         let mut scopes = Vec::new();
         scopes.push(HashMap::new());
-        Interpreter { scopes: scopes }
+        let gc = GarbageCollector::new();
+        Interpreter {
+            scopes: scopes,
+            gc: gc,
+        }
     }
     fn set_local(&mut self, var_name: &str, value: LuaValue) {
         self.scopes
@@ -31,13 +38,13 @@ impl Interpreter {
                 return v.clone();
             }
         }
-        LuaValue::Nil
+        Default::default()
     }
 }
 
 impl ASTVisitor<InterpreterResult> for Interpreter {
     fn visit_table_constructor(&mut self, tc: &mut TableConstructor) -> Option<InterpreterResult> {
-        let rv = LuaTable::default();
+        let rv = LuaTableRef::default();
         let mut index_count = 1.0f64;
         {
             for field in tc.0.iter_mut() {
@@ -61,6 +68,9 @@ impl ASTVisitor<InterpreterResult> for Interpreter {
         }
         Some(InterpreterResult::LuaValue(LuaValue::Table(rv)))
     }
+    fn visit_prefix_exp(&mut self, pe: &mut PrefixExp) -> Option<InterpreterResult> {
+        unimplemented!()
+    }
     fn visit_simple_exp(&mut self, se: &mut SimpleExp) -> Option<InterpreterResult> {
         Some(InterpreterResult::LuaValue(match se {
             &mut SimpleExp::Nil => LuaValue::Nil,
@@ -69,7 +79,7 @@ impl ASTVisitor<InterpreterResult> for Interpreter {
             &mut SimpleExp::Number(ref val) => LuaValue::Number(*val),
             &mut SimpleExp::StringLiteral(ref val) => LuaValue::String(val.clone()),
             &mut SimpleExp::Elipsis => LuaValue::Nil,
-            &mut SimpleExp::PrefixExp(_) => unimplemented!(),
+            &mut SimpleExp::PrefixExp(ref mut pe) => return self.visit_prefix_exp(pe),
             &mut SimpleExp::TableConstructor(ref mut tc) => {
                 return self.visit_table_constructor(tc)
             }
@@ -85,7 +95,7 @@ impl ASTVisitor<InterpreterResult> for Interpreter {
             }
             &mut Exp::UnaryOp(UnOp::Neg, ref mut e) => {
                 let lv = try_ir!(self.visit_exp(e)).unwrap().get_lua_value();
-                let rv = LuaValue::Number(-(lv.to_number()));
+                let rv = LuaValue::Number(-try_ir!(res lv.to_number()));
                 Some(InterpreterResult::LuaValue(rv))
             }
             &mut Exp::UnaryOp(UnOp::Len, ref mut e) => {
@@ -93,30 +103,52 @@ impl ASTVisitor<InterpreterResult> for Interpreter {
                     LuaValue::String(se) => Some(InterpreterResult::LuaValue(LuaValue::Number(
                         se.len() as f64,
                     ))),
-                    _ => panic!("Tried to call len on non string value"),
+                    _ => panic_ir!("Tried to call len on non string value"),
                 }
             }
             &mut Exp::BinaryOp(ref mut e1, op, ref mut e2) => {
                 let lv1 = try_ir!(self.visit_exp(e1)).unwrap().get_lua_value();
                 let lv2 = try_ir!(self.visit_exp(e2)).unwrap().get_lua_value();
                 let rv = match op {
-                    BinOp::Plus => LuaValue::Number(lv1.to_number() + lv2.to_number()),
-                    BinOp::Minus => LuaValue::Number(lv1.to_number() - lv2.to_number()),
-                    BinOp::Mult => LuaValue::Number(lv1.to_number() * lv2.to_number()),
-                    BinOp::Div => LuaValue::Number(lv1.to_number() / lv2.to_number()),
-                    BinOp::Pow => LuaValue::Number(lv1.to_number().powf(lv2.to_number())),
-                    BinOp::Concat => {
-                        LuaValue::String(format!("{}{}", lv1.to_string(), lv2.to_string()))
-                    }
-                    BinOp::LessThan => LuaValue::Boolean(lv1.to_number() < lv2.to_number()),
-                    BinOp::LessEqual => LuaValue::Boolean(lv1.to_number() <= lv2.to_number()),
-                    BinOp::GreaterThan => LuaValue::Boolean(lv1.to_number() > lv2.to_number()),
-                    BinOp::GreaterEqual => LuaValue::Boolean(lv1.to_number() >= lv2.to_number()),
+                    BinOp::Plus => LuaValue::Number(
+                        try_ir!(res lv1.to_number()) + try_ir!(res lv2.to_number()),
+                    ),
+                    BinOp::Minus => LuaValue::Number(
+                        try_ir!(res lv1.to_number()) - try_ir!(res lv2.to_number()),
+                    ),
+                    BinOp::Mult => LuaValue::Number(
+                        try_ir!(res lv1.to_number()) * try_ir!(res lv2.to_number()),
+                    ),
+                    BinOp::Div => LuaValue::Number(
+                        try_ir!(res lv1.to_number()) / try_ir!(res lv2.to_number()),
+                    ),
+                    BinOp::Pow => LuaValue::Number(
+                        try_ir!(res lv1.to_number()).powf(try_ir!(res lv2.to_number())),
+                    ),
+                    BinOp::Concat => LuaValue::String(format!(
+                        "{}{}",
+                        try_ir!(res lv1.to_string()),
+                        try_ir!(res lv2.to_string())
+                    )),
+                    BinOp::LessThan => LuaValue::Boolean(
+                        try_ir!(res lv1.to_number()) < try_ir!(res lv2.to_number()),
+                    ),
+                    BinOp::LessEqual => LuaValue::Boolean(
+                        try_ir!(res lv1.to_number()) <= try_ir!(res lv2.to_number()),
+                    ),
+                    BinOp::GreaterThan => LuaValue::Boolean(
+                        try_ir!(res lv1.to_number()) > try_ir!(res lv2.to_number()),
+                    ),
+                    BinOp::GreaterEqual => LuaValue::Boolean(
+                        try_ir!(res lv1.to_number()) >= try_ir!(res lv2.to_number()),
+                    ),
                     BinOp::Equals => LuaValue::Boolean(lv1 == lv2),
-                    BinOp::NotEquals => LuaValue::Boolean(lv1 == lv2),
+                    BinOp::NotEquals => LuaValue::Boolean(lv1 != lv2),
                     BinOp::And => LuaValue::Boolean(lv1.to_bool() && lv2.to_bool()),
                     BinOp::Or => LuaValue::Boolean(lv1.to_bool() || lv2.to_bool()),
-                    BinOp::Mod => LuaValue::Number(lv1.to_number() % lv2.to_number()),
+                    BinOp::Mod => LuaValue::Number(
+                        try_ir!(res lv1.to_number()) % try_ir!(res lv2.to_number()),
+                    ),
                 };
                 Some(InterpreterResult::LuaValue(rv))
             }
@@ -125,22 +157,49 @@ impl ASTVisitor<InterpreterResult> for Interpreter {
     fn visit_stat(&mut self, st: &mut Stat) -> Option<InterpreterResult> {
         match st {
             &mut Stat::LocalAssign(ref name_list, ref mut exp_list) => {
-                //TODO: Make this evaluate all expressions before assigning
-                let name_list = &name_list.0;
-                let exp_list = &mut exp_list.0;
-                let mut index = 0;
-                while index < name_list.len() || index < exp_list.len() {
-                    let exp = if index < exp_list.len() {
-                        try_ir!(self.visit_exp(&mut exp_list[index]))
-                            .unwrap()
-                            .get_lua_value()
-                    } else {
-                        LuaValue::Nil
+                let mut res_list = Vec::new();
+                for mut exp in exp_list.0.iter_mut() {
+                    res_list.push(try_ir!(self.visit_exp(&mut exp)).unwrap().get_lua_value());
+                }
+                res_list.resize(name_list.0.len(), LuaValue::Nil);
+                for (name, value) in name_list.0.iter().zip(res_list.into_iter()) {
+                    self.set_local(name, value);
+                }
+                None
+            }
+            &mut Stat::Assign(ref mut var_list, ref mut exp_list) => {
+                let mut res_list = Vec::new();
+                for mut exp in exp_list.0.iter_mut() {
+                    res_list.push(try_ir!(self.visit_exp(&mut exp)).unwrap().get_lua_value());
+                }
+                res_list.resize(var_list.0.len(), LuaValue::Nil);
+                let table_vs_insert = |interpreter: &mut Interpreter,
+                                       lt: LuaTableRef,
+                                       vss: &mut [VarSuffix],
+                                       value: LuaValue| {
+                    let index_exp = match vss[0] {
+                        _ => unimplemented!(),
                     };
-                    if index < name_list.len() {
-                        self.set_local(&name_list[index], exp);
+                    if vss.len() == 1 {
+                    } else {
                     }
-                    index += 1;
+                    None
+                };
+                for (var, value) in var_list.0.iter_mut().zip(res_list.into_iter()) {
+                    match var {
+                        &mut Var::Name(ref name, ref mut vs) => {
+                            if vs.len() == 0 {
+                                self.set_local(name, value);
+                            } else {
+                                let table = try_ir!(res self.get_variable(&name).to_table());
+                                try_ir!(table_vs_insert(self, table, &mut vs[..], value));
+                            }
+                        }
+                        &mut Var::Exp(ref mut exp, ref mut vs) => {
+                            let table = try_ir!(res try_ir!(self.visit_exp(exp)).unwrap().get_lua_value().to_table());
+                            try_ir!(table_vs_insert(self, table, &mut vs[..], value));
+                        }
+                    }
                 }
                 None
             }
@@ -167,11 +226,9 @@ mod tests {
 
     #[test]
     fn test_local_assign() {
-        let mut input = parse::parse_lua_source(
-            //b"local a = 4 + 4"
-            b"local a = 4 local b, c = 5, 6 local d, e = 7 local f = 8, 9",
-        )
-        .unwrap();
+        let mut input =
+            parse::parse_lua_source(b"local a = 4 local b, c = 5, 6 local d, e = 7 local f = 8, 9")
+                .unwrap();
         let mut interpreter = Interpreter::new();
         interpreter.visit_chunk(&mut input);
         assert_eq!(interpreter.get_variable("a"), LuaValue::Number(4.0));
@@ -180,6 +237,28 @@ mod tests {
         assert_eq!(interpreter.get_variable("d"), LuaValue::Number(7.0));
         assert_eq!(interpreter.get_variable("e"), LuaValue::Nil);
         assert_eq!(interpreter.get_variable("f"), LuaValue::Number(8.0));
+    }
+    #[test]
+    fn test_assign() {
+        let mut input = parse::parse_lua_source(
+            b"a = 4
+              b = {}
+              b.a = 4",
+        )
+        .unwrap();
+        let mut interpreter = Interpreter::new();
+        interpreter.visit_chunk(&mut input);
+        assert_eq!(interpreter.get_variable("a"), LuaValue::Number(4.0));
+        assert_eq!(
+            interpreter
+                .get_variable("b")
+                .to_table()
+                .unwrap()
+                .get_value_by_name(format!("a"))
+                .unwrap()
+                .get_lua_value(),
+            LuaValue::Number(4.0)
+        );
     }
 
     #[test]
@@ -192,17 +271,16 @@ mod tests {
               local j, k = # [[hello]], -4.0
               local l, m, n, o = 1 + 1, 2 - 1, 2 * 2, 7 / 2
               local p, q, r, s = 'h'..'i', '4' ^ 4, true and false, true or false
-              local t = {a = 4}\n",
+              local t = {a = false}\n",
         )
         .unwrap();
-        interpreter.visit_chunk(&mut input);
         assert_eq!(interpreter.get_variable("a"), LuaValue::Nil);
         assert_eq!(interpreter.get_variable("b"), LuaValue::Boolean(false));
         assert_eq!(interpreter.get_variable("c"), LuaValue::Boolean(true));
         assert_eq!(interpreter.get_variable("d"), LuaValue::Number(2.0));
         assert_eq!(
             interpreter.get_variable("e"),
-            LuaValue::String("Hello".to_string())
+            LuaValue::String(format!("Hello"))
         );
         assert_eq!(interpreter.get_variable("f"), LuaValue::Boolean(true));
         assert_eq!(interpreter.get_variable("g"), LuaValue::Boolean(true));
@@ -216,7 +294,7 @@ mod tests {
         assert_eq!(interpreter.get_variable("o"), LuaValue::Number(3.5));
         assert_eq!(
             interpreter.get_variable("p"),
-            LuaValue::String("hi".to_string())
+            LuaValue::String(format!("hi"))
         );
         assert_eq!(interpreter.get_variable("q"), LuaValue::Number(256.0));
         assert_eq!(interpreter.get_variable("r"), LuaValue::Boolean(false));
@@ -226,7 +304,7 @@ mod tests {
                 .get_variable("t")
                 .to_table()
                 .unwrap()
-                .get_value_by_name("a".to_string())
+                .get_value_by_name(format!("a"))
                 .unwrap()
                 .get_lua_value(),
             LuaValue::Number(4.0)

@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
+type Result<T> = ::std::result::Result<T, String>;
+
 #[derive(Debug, PartialEq, Clone)]
 pub enum LuaValue {
     Nil,
@@ -12,26 +14,31 @@ pub enum LuaValue {
     Number(f64),
     String(String),
     Function(LuaFunction),
-    Table(LuaTable),
+    Table(LuaTableRef),
     Thread,
     UserData,
 }
 
+impl Default for LuaValue {
+    fn default() -> Self {
+        LuaValue::Nil
+    }
+}
+
 impl LuaValue {
-    pub fn to_string(self) -> String {
+    pub fn to_string(self) -> Result<String> {
         match self {
-            LuaValue::Nil => format!("nil"),
-            LuaValue::Boolean(b) => format!("{}", b),
-            LuaValue::String(b) => b,
-            LuaValue::Number(x) => format!("{}", x),
-            _ => unimplemented!(),
+            LuaValue::String(b) => Ok(b),
+            LuaValue::Number(x) => Ok(format!("{}", x)),
+            _ => Err(format!("Value could not be cast to string")),
         }
     }
-    pub fn to_number(self) -> f64 {
+    pub fn to_number(self) -> Result<f64> {
+        let err_msg = || format!("Value could not be cast to number");
         match self {
-            LuaValue::Number(n) => n,
-            LuaValue::String(n) => str::parse::<f64>(&n).unwrap(),
-            _ => unimplemented!(),
+            LuaValue::Number(n) => Ok(n),
+            LuaValue::String(n) => str::parse::<f64>(&n).map_err(|_| err_msg()),
+            _ => Err(err_msg()),
         }
     }
     pub fn to_bool(self) -> bool {
@@ -41,10 +48,10 @@ impl LuaValue {
             _ => true,
         }
     }
-    pub fn to_table(self) -> Option<LuaTable> {
+    pub fn to_table(self) -> Result<LuaTableRef> {
         match self {
-            LuaValue::Table(lt) => Some(lt),
-            _ => None,
+            LuaValue::Table(lt) => Ok(lt),
+            _ => Err(format!("Expected table, got something else")),
         }
     }
 }
@@ -55,13 +62,13 @@ pub enum LuaIndexValue {
     Number(ordered_float::NotNaN<f64>),
     String(String),
     Function(LuaFunction),
-    Table(LuaTable),
+    Table(LuaTableRef),
     Thread,
     UserData,
 }
 
 impl LuaIndexValue {
-    fn from(lv: LuaValue) -> Result<Self, String> {
+    fn from(lv: LuaValue) -> Result<Self> {
         match lv {
             LuaValue::Nil => Err(format!("Table index is nil")),
             LuaValue::Boolean(t) => Ok(LuaIndexValue::Boolean(t)),
@@ -82,25 +89,25 @@ impl LuaIndexValue {
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct LuaTable {
+pub struct LuaTableRef {
     map: Rc<RefCell<HashMap<LuaIndexValue, LuaValue>>>,
 }
 
-impl Hash for LuaTable {
+impl Hash for LuaTableRef {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.map.as_ptr().hash(state);
     }
 }
 
-impl PartialEq for LuaTable {
-    fn eq(&self, other: &LuaTable) -> bool {
+impl PartialEq for LuaTableRef {
+    fn eq(&self, other: &LuaTableRef) -> bool {
         self.map.as_ptr() == other.map.as_ptr()
     }
 }
 
-impl Eq for LuaTable {}
+impl Eq for LuaTableRef {}
 
-impl LuaTable {
+impl LuaTableRef {
     pub fn borrow(&self) -> Ref<HashMap<LuaIndexValue, LuaValue>> {
         self.map.borrow()
     }
@@ -159,7 +166,7 @@ impl InterpreterResult {
         if let InterpreterResult::LuaValue(lv) = self {
             lv
         } else {
-            panic!("Expected LuaValue, got something else.")
+            panic!("Internal interpreter error: Expected LuaValue, got something else.")
         }
     }
 }
@@ -170,5 +177,17 @@ macro_rules! try_ir {
             Some(InterpreterResult::Error(s)) => return Some(InterpreterResult::Error(s)),
             other => other,
         }
+    };
+    (res $x:expr) => {
+        match $x {
+            Ok(v) => v,
+            Err(s) => return Some(InterpreterResult::Error(s)),
+        }
+    };
+}
+
+macro_rules! panic_ir {
+    ($($x:expr),*) => {
+        return Some(InterpreterResult::Error(format!($($x),*)))
     };
 }
