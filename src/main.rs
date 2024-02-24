@@ -8,7 +8,7 @@ use std::io::Read;
 mod ast_types;
 mod error;
 // mod interpreter;
-// mod parse;
+mod parse;
 
 // use ast_types::ASTVisitor;
 // use interpreter::Interpreter;
