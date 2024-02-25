@@ -4,7 +4,7 @@ mod garbage_collector;
 
 use self::garbage_collector::{GarbageCollector, Gc};
 use self::types::*;
-use ast_types::*;
+use crate::ast_types::*;
 use std::collections::HashMap;
 
 #[derive(Debug)]

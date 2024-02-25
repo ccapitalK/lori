@@ -1,4 +1,4 @@
-use ast_types::FuncBody;
+use crate::ast_types::FuncBody;
 use ordered_float;
 use std::cell::{Ref, RefCell, RefMut};
 use std::collections::HashMap;

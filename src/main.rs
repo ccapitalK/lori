@@ -6,11 +6,11 @@ use std::io::Read;
 
 mod ast_types;
 mod error;
-// mod interpreter;
+mod interpreter;
 mod parse;
 
-// use ast_types::ASTVisitor;
-// use interpreter::Interpreter;
+use ast_types::ASTVisitor;
+use interpreter::Interpreter;
 
 fn main() {
     let mut data = Vec::new();
@@ -19,8 +19,7 @@ fn main() {
         f.read_to_end(&mut data).unwrap();
     }
     let tokens = parse::tokenify_string(data.as_slice()).unwrap();
-    let parsed = parse::parse_chunk(&tokens).unwrap();
-    println!("{:#?}", parsed);
-    // let mut interpreter = Interpreter::new();
-    // interpreter.visit_chunk(&mut parsed);
+    let mut parsed = parse::parse_chunk(&tokens).unwrap();
+    let mut interpreter = Interpreter::new();
+    interpreter.visit_chunk(&mut parsed);
 }
