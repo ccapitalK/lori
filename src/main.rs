@@ -1,4 +1,3 @@
-#[macro_use]
 extern crate nom;
 extern crate ordered_float;
 
@@ -14,13 +13,14 @@ mod parse;
 // use interpreter::Interpreter;
 
 fn main() {
-    // let mut data = Vec::new();
-    // {
-    //     let mut f = File::open("in.lua").unwrap();
-    //     f.read_to_end(&mut data).unwrap();
-    // }
-    // let tokens = parse::tokenify_string(data.as_slice()).unwrap();
-    // let mut parsed = parse::parse_chunk(&tokens).unwrap();
+    let mut data = Vec::new();
+    {
+        let mut f = File::open("in.lua").unwrap();
+        f.read_to_end(&mut data).unwrap();
+    }
+    let tokens = parse::tokenify_string(data.as_slice()).unwrap();
+    let parsed = parse::parse_chunk(&tokens).unwrap();
+    println!("{:#?}", parsed);
     // let mut interpreter = Interpreter::new();
     // interpreter.visit_chunk(&mut parsed);
 }

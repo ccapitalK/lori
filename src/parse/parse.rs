@@ -1,546 +1,630 @@
 use super::lex;
-use ast_types::*;
+use crate::{ast_types::*, error::{NullError, NULL_ERROR}};
 use nom::*;
 use std::{mem, str};
 
-// --------------- Some Helper Macros ------------------
+// --------------- Some Helper Utils -------------------
 
-// implement the parseable trait for a type, using a interface
-// similar to named!
-macro_rules! impl_parse {
-    ($t:ty, $input:ident, $d:block) => (
-        impl Parseable for $t {
-            fn parse<'a, 'b>($input: &'a[LexicalElement<'b>])
-                -> IResult<&'a[LexicalElement<'b>], Self>{
-                $d
-            }
-        }
-    );
-    ($t:ty, $submac:ident!( $($args:tt)* )) => (
-        impl Parseable for $t {
-            fn parse<'a, 'b>(i: &'a[LexicalElement<'b>])
-                -> IResult<&'a[LexicalElement<'b>], Self>{
-                    $submac!(i, $($args)*)
-            }
-        }
-    );
-}
-
-macro_rules! le_tag {
-    ($i:expr, $inp:pat) => {{
-        if $i.len() < 1 {
-            IResult::Error(ErrorKind::Custom(0))
-        } else if let $inp = $i[0] {
-            IResult::Done(&$i[1..], $i[0].clone())
-        } else {
-            IResult::Error(ErrorKind::Tag)
-        }
-    }};
-    ($i:expr, $inp:pat => $r:expr) => {{
-        if $i.len() < 1 {
-            IResult::Error(ErrorKind::Custom(0))
-        } else if let $inp = $i[0] {
-            IResult::Done(&$i[1..], $r)
-        } else {
-            IResult::Error(ErrorKind::Tag)
-        }
-    }};
-}
-
-// ---------------- Actual parsers ---------------------
-
-impl_parse!(
-    UnOp,
-    alt!(
-        le_tag!(LexicalElement::Minus => UnOp::Neg)
-            | le_tag!(LexicalElement::Keyword("not") => UnOp::Not)
-            | le_tag!(LexicalElement::Hash => UnOp::Len)
-    )
-);
-
-impl_parse!(
-    BinOp,
-    alt!(
-        le_tag!(LexicalElement::Plus           => BinOp::Plus        )
-            | le_tag!(LexicalElement::Minus          => BinOp::Minus       )
-            | le_tag!(LexicalElement::Mult           => BinOp::Mult        )
-            | le_tag!(LexicalElement::Div            => BinOp::Div         )
-            | le_tag!(LexicalElement::Caret          => BinOp::Pow         )
-            | le_tag!(LexicalElement::Mod            => BinOp::Mod         )
-            | le_tag!(LexicalElement::Concat         => BinOp::Concat      )
-            | le_tag!(LexicalElement::LessEqual      => BinOp::LessEqual   )
-            | le_tag!(LexicalElement::LessThan       => BinOp::LessThan    )
-            | le_tag!(LexicalElement::GreaterThan    => BinOp::GreaterThan )
-            | le_tag!(LexicalElement::GreaterEqual   => BinOp::GreaterEqual)
-            | le_tag!(LexicalElement::Equals         => BinOp::Equals      )
-            | le_tag!(LexicalElement::NotEquals      => BinOp::NotEquals   )
-            | le_tag!(LexicalElement::Keyword("and") => BinOp::And         )
-            | le_tag!(LexicalElement::Keyword("or")  => BinOp::Or          )
-    )
-);
-
-impl_parse!(
-    FieldSep,
-    alt!(
-        le_tag!(LexicalElement::Semicolon => FieldSep::Semicolon)
-            | le_tag!(LexicalElement::Comma => FieldSep::Comma)
-    )
-);
+type ParseResult<'a, T> = IResult<&'a [LexicalElement<'a>], T, NullError>;
 
 fn escape_string_literal(a: &str) -> String {
     // TODO: make this actually escape
     a.to_string()
 }
 
-fn parse_number(a: &str) -> f64 {
+fn parse_number(a: &str) -> Result<f64, Err<NullError>> {
     //TODO: Make this handle hex literals
-    a.parse::<f64>().unwrap()
+    a.parse::<f64>().map_err(|_| Err::Error(NULL_ERROR))
 }
 
-impl_parse!(
-    SimpleExp,
-    alt!(
-        le_tag!(LexicalElement::Keyword("nil") => SimpleExp::Nil)
-            | le_tag!(LexicalElement::Keyword("false") => SimpleExp::False)
-            | le_tag!(LexicalElement::Keyword("true") => SimpleExp::True)
-            | le_tag!(LexicalElement::Elipsis => SimpleExp::Elipsis)
-            | le_tag!(LexicalElement::StringLiteral(a) =>
-                SimpleExp::StringLiteral(escape_string_literal(a)))
-            | le_tag!(LexicalElement::Number(a) => SimpleExp::Number(parse_number(a)))
-            | do_parse!(
-                tc: call!(TableConstructor::parse) >> (SimpleExp::TableConstructor(Box::new(tc)))
+// TODO: Investigate returning incomplete?
+fn parse_unit<'a>(
+    expected: LexicalElement<'static>,
+) -> impl FnMut(&'a [LexicalElement<'a>]) -> ParseResult<'a, &'a LexicalElement<'a>> {
+    move |i: &'a [LexicalElement<'a>]| {
+        if i.is_empty() {
+            IResult::Err(Err::Error(NULL_ERROR))
+        } else if i[0] != expected {
+            IResult::Err(Err::Error(NULL_ERROR))
+        } else {
+            IResult::Ok((&i[1..], &i[0]))
+        }
+    }
+}
+
+/// Macro that takes a LexicalElement lifetime, a pattern to match against and an expression to
+/// generate from the value and creates a parse that tries to match one element against that
+/// pattern
+macro_rules! destructure1 {
+    ($l:lifetime, $p:pat => $d:expr) => {
+        move |i: &$l [LexicalElement<$l>]| {
+            if i.is_empty() {
+                IResult::Err(Err::Error(NULL_ERROR))
+            } else if let $p = i[0] {
+                IResult::Ok((&i[1..], $d))
+            } else {
+                IResult::Err(Err::Error(NULL_ERROR))
+            }
+        }
+    }
+}
+
+// ---------------- Actual parsers ---------------------
+
+impl Parseable for UnOp {
+    fn parse<'a>(i: &'a [LexicalElement<'a>]) -> IResult<&'a [LexicalElement<'a>], Self, NullError> {
+        branch::alt((
+            combinator::value(UnOp::Neg, parse_unit(LexicalElement::Minus)),
+            combinator::value(UnOp::Not, parse_unit(LexicalElement::Keyword("not"))),
+            combinator::value(UnOp::Len, parse_unit(LexicalElement::Hash)),
+        ))(i)
+    }
+}
+
+impl Parseable for BinOp {
+    fn parse<'a>(i: &'a [LexicalElement<'a>]) -> IResult<&'a [LexicalElement<'a>], Self, NullError> {
+        branch::alt((
+            combinator::value(BinOp::Plus        , parse_unit(LexicalElement::Plus          )),
+            combinator::value(BinOp::Minus       , parse_unit(LexicalElement::Minus         )),
+            combinator::value(BinOp::Mult        , parse_unit(LexicalElement::Mult          )),
+            combinator::value(BinOp::Div         , parse_unit(LexicalElement::Div           )),
+            combinator::value(BinOp::Pow         , parse_unit(LexicalElement::Caret         )),
+            combinator::value(BinOp::Mod         , parse_unit(LexicalElement::Mod           )),
+            combinator::value(BinOp::Concat      , parse_unit(LexicalElement::Concat        )),
+            combinator::value(BinOp::LessEqual   , parse_unit(LexicalElement::LessEqual     )),
+            combinator::value(BinOp::LessThan    , parse_unit(LexicalElement::LessThan      )),
+            combinator::value(BinOp::GreaterThan , parse_unit(LexicalElement::GreaterThan   )),
+            combinator::value(BinOp::GreaterEqual, parse_unit(LexicalElement::GreaterEqual  )),
+            combinator::value(BinOp::Equals      , parse_unit(LexicalElement::Equals        )),
+            combinator::value(BinOp::NotEquals   , parse_unit(LexicalElement::NotEquals     )),
+            combinator::value(BinOp::And         , parse_unit(LexicalElement::Keyword("and"))),
+            combinator::value(BinOp::Or          , parse_unit(LexicalElement::Keyword("or") )),
+        ))(i)
+    }
+}
+
+impl Parseable for FieldSep {
+    fn parse<'a>(i: &'a [LexicalElement<'a>]) -> IResult<&'a [LexicalElement<'a>], Self, NullError> {
+        branch::alt((
+            combinator::value(FieldSep::Semicolon, parse_unit(LexicalElement::Semicolon)),
+            combinator::value(FieldSep::Comma, parse_unit(LexicalElement::Comma)),
+        ))(i)
+    }
+}
+
+impl Parseable for SimpleExp {
+    fn parse<'a>(i: &'a [LexicalElement<'a>]) -> IResult<&'a [LexicalElement<'a>], Self, NullError> {
+        branch::alt((
+            combinator::value(SimpleExp::Elipsis, parse_unit(LexicalElement::Elipsis)),
+            combinator::value(SimpleExp::Nil, parse_unit(LexicalElement::Keyword("nil"))),
+            combinator::value(SimpleExp::False, parse_unit(LexicalElement::Keyword("false"))),
+            combinator::value(SimpleExp::True, parse_unit(LexicalElement::Keyword("true"))),
+            destructure1!('a, LexicalElement::StringLiteral(s) => SimpleExp::StringLiteral(escape_string_literal(s))),
+            destructure1!('a, LexicalElement::Number(n) => SimpleExp::Number(parse_number(n)?)),
+            combinator::map(TableConstructor::parse, |tc| SimpleExp::TableConstructor(Box::new(tc))),
+            combinator::map(PrefixExp::parse, |px| SimpleExp::PrefixExp(Box::new(px))),
+        ))(i)
+    }
+}
+
+impl Parseable for Field {
+    fn parse<'a>(i: &'a [LexicalElement<'a>]) -> IResult<&'a [LexicalElement<'a>], Self, NullError> {
+        branch::alt((
+            combinator::map(
+                sequence::tuple((
+                    destructure1!('a, LexicalElement::Identifier(i) => i),
+                    parse_unit(LexicalElement::Assign),
+                    Exp::parse,
+                )),
+                |(ident, _, exp)| Field::NamedExp(ident.to_string(), Box::new(exp)),
+            ),
+            combinator::map(Exp::parse, |exp| Field::Exp(Box::new(exp))),
+            combinator::map(
+                sequence::tuple((
+                    parse_unit(LexicalElement::OpenSquare),
+                    Exp::parse,
+                    parse_unit(LexicalElement::CloseSquare),
+                    parse_unit(LexicalElement::Assign),
+                    Exp::parse,
+                )),
+                |(_, exp1, _, _, exp2)| Field::IndexExp(Box::new(exp1), Box::new(exp2)),
             )
-            | do_parse!(px: call!(PrefixExp::parse) >> (SimpleExp::PrefixExp(Box::new(px))))
-    )
-);
+        ))(i)
+    }
+}
 
-impl_parse!(
-    Field,
-    alt!(
-        do_parse!(
-            n: le_tag!(LexicalElement::Identifier(s) => s)
-                >> le_tag!(LexicalElement::Assign)
-                >> v: call!(Exp::parse)
-                >> (Field::NamedExp(n.to_string(), Box::new(v)))
-        ) | do_parse!(v: call!(Exp::parse) >> (Field::Exp(Box::new(v))))
-            | do_parse!(
-                le_tag!(LexicalElement::OpenSquare)
-                    >> v1: call!(Exp::parse)
-                    >> le_tag!(LexicalElement::CloseSquare)
-                    >> le_tag!(LexicalElement::Assign)
-                    >> v2: call!(Exp::parse)
-                    >> (Field::IndexExp(Box::new(v1), Box::new(v2)))
-            )
-    )
-);
+impl Parseable for TableConstructor {
+    fn parse<'a>(i: &'a [LexicalElement<'a>]) -> IResult<&'a [LexicalElement<'a>], Self, NullError> {
+        combinator::map(
+            sequence::tuple((
+                parse_unit(LexicalElement::OpenBrace),
+                combinator::opt(combinator::map(
+                    sequence::tuple((
+                        Field::parse,
+                        multi::many0(
+                            sequence::preceded(
+                                FieldSep::parse,
+                                Field::parse,
+                            ),
+                        ),
+                    )),
+                    |(s, mut r)| {
+                        let mut v = vec![s];
+                        v.append(&mut r);
+                        v
+                    },
+                )),
+                parse_unit(LexicalElement::CloseBrace),
+            )),
+            |(_, v, _)| TableConstructor(v.unwrap_or_else(|| vec![])),
+        )(i)
+    }
+}
 
-impl_parse!(
-    TableConstructor,
-    do_parse!(
-        le_tag!(LexicalElement::OpenBrace)
-            >> r: opt!(do_parse!(
-                h: call!(Field::parse)
-                    >> r: many0!(do_parse!(
-                        call!(FieldSep::parse) >> h: call!(Field::parse) >> (h)
-                    ))
-                    >> opt!(call!(FieldSep::parse))
-                    >> ({
-                        let mut rv = Vec::new();
-                        let mut r = r;
-                        rv.push(h);
-                        rv.append(&mut r);
-                        rv
-                    })
-            ))
-            >> opt!(call!(FieldSep::parse))
-            >> le_tag!(LexicalElement::CloseBrace)
-            >> (TableConstructor(match r {
-                Some(v) => v,
-                None => Vec::new(),
-            }))
-    )
-);
+impl Parseable for NameList {
+    fn parse<'a>(i: &'a [LexicalElement<'a>]) -> IResult<&'a [LexicalElement<'a>], Self, NullError> {
+        combinator::map(
+            sequence::tuple((
+                destructure1!('a, LexicalElement::Identifier(a) => a.to_string()),
+                multi::many0(sequence::preceded(
+                    parse_unit(LexicalElement::Comma),
+                    destructure1!('a, LexicalElement::Identifier(a) => a.to_string())
+                )),
+            )),
+            |(s, mut r)| {
+                let mut v = vec![s];
+                v.append(&mut r);
+                NameList(v)
+            },
+        )(i)
+    }
+}
 
-impl_parse!(
-    NameList,
-    do_parse!(
-        name: le_tag!(LexicalElement::Identifier(a) => a.to_string())
-            >> rest: many0!(do_parse!(
-                le_tag!(LexicalElement::Comma)
-                    >> name: le_tag!(LexicalElement::Identifier(a) => a.to_string())
-                    >> (name)
-            ))
-            >> ({
-                let mut rv = Vec::new();
-                let mut rest = rest;
-                rv.push(name);
-                rv.append(&mut rest);
-                NameList(rv)
-            })
-    )
-);
+impl Parseable for ExpList {
+    fn parse<'a>(i: &'a [LexicalElement<'a>]) -> IResult<&'a [LexicalElement<'a>], Self, NullError> {
+        combinator::map(
+            sequence::tuple((
+                Exp::parse,
+                multi::many0(sequence::preceded(
+                    parse_unit(LexicalElement::Comma),
+                    Exp::parse
+                )),
+            )),
+            |(s, mut r)| {
+                let mut v = vec![s];
+                v.append(&mut r);
+                ExpList(v)
+            },
+        )(i)
+    }
+}
 
-impl_parse!(
-    ExpList,
-    do_parse!(
-        exp: call!(Exp::parse)
-            >> rest: many0!(do_parse!(
-                le_tag!(LexicalElement::Comma) >> exp: call!(Exp::parse) >> (exp)
-            ))
-            >> ({
-                let mut rv = Vec::new();
-                let mut rest = rest;
-                rv.push(exp);
-                rv.append(&mut rest);
-                ExpList(rv)
-            })
-    )
-);
+impl Parseable for Args {
+    fn parse<'a>(i: &'a [LexicalElement<'a>]) -> IResult<&'a [LexicalElement<'a>], Self, NullError> {
+        branch::alt((
+            combinator::map(
+                TableConstructor::parse,
+                |tc| Args::TableConstructor(Box::new(tc)),
+            ),
+            combinator::map(
+                sequence::tuple((
+                    parse_unit(LexicalElement::OpenParen),
+                    parse_unit(LexicalElement::CloseParen),
+                )),
+                |_| Args::Empty,
+            ),
+            combinator::map(
+                sequence::tuple((
+                    parse_unit(LexicalElement::OpenParen),
+                    ExpList::parse,
+                    parse_unit(LexicalElement::CloseParen),
+                )),
+                |(_, el, _)| Args::ExpList(Box::new(el)),
+            ),
+            destructure1!('a, LexicalElement::StringLiteral(a) => Args::StringLiteral(escape_string_literal(a))),
+        ))(i)
+    }
+}
 
-impl_parse!(
-    Args,
-    alt!(
-        do_parse!(
-            le_tag!(LexicalElement::OpenParen)
-                >> el: call!(ExpList::parse)
-                >> le_tag!(LexicalElement::CloseParen)
-                >> (Args::ExpList(Box::new(el)))
-        ) | do_parse!(
-            le_tag!(LexicalElement::OpenParen)
-                >> le_tag!(LexicalElement::CloseParen)
-                >> (Args::Empty)
-        ) | do_parse!(tc: call!(TableConstructor::parse) >> (Args::TableConstructor(Box::new(tc))))
-            | le_tag!(LexicalElement::StringLiteral(a) => (Args::StringLiteral(escape_string_literal(a))))
-    )
-);
+impl Parseable for ParList {
+    fn parse<'a>(i: &'a [LexicalElement<'a>]) -> IResult<&'a [LexicalElement<'a>], Self, NullError> {
+        branch::alt((
+            destructure1!('a, LexicalElement::Elipsis => ParList(Vec::new(), true)),
+            combinator::map(
+                sequence::tuple((
+                    NameList::parse,
+                    combinator::opt(sequence::pair(
+                        parse_unit(LexicalElement::Comma),
+                        parse_unit(LexicalElement::Elipsis),
+                    )),
+                )),
+                |(names, elipsis)| ParList(names.0, elipsis.is_some())
+            ),
+        ))(i)
+    }
+}
 
-impl_parse!(
-    ParList,
-    alt!(
-        le_tag!(LexicalElement::Elipsis => ParList(Vec::new(), true))
-            | do_parse!(
-                names: call!(NameList::parse)
-                    >> elipsis:
-                        opt!(do_parse!(
-                            le_tag!(LexicalElement::Comma)
-                                >> le_tag!(LexicalElement::Elipsis)
-                                >> ()
-                        ))
-                    >> ({
-                        let NameList(names) = names;
-                        ParList(names, Some(()) == elipsis)
-                    })
-            )
-    )
-);
-
-impl_parse!(
-    FuncName,
-    do_parse!(
-        name: le_tag!(LexicalElement::Identifier(a) => a.to_string())
-            >> rest: many0!(do_parse!(
-                le_tag!(LexicalElement::Dot)
-                    >> name: le_tag!(LexicalElement::Identifier(a) => a.to_string())
-                    >> (name)
-            ))
-            >> last_name:
-                opt!(do_parse!(
-                    le_tag!(LexicalElement::Colon)
-                        >> name: le_tag!(LexicalElement::Identifier(a) => a)
-                        >> (name.to_string())
+impl Parseable for FuncName {
+    fn parse<'a>(i: &'a [LexicalElement<'a>]) -> IResult<&'a [LexicalElement<'a>], Self, NullError> {
+        combinator::map(
+            sequence::tuple((
+                destructure1!('a, LexicalElement::Identifier(a) => a.to_string()),
+                multi::many0(sequence::preceded(
+                    parse_unit(LexicalElement::Dot),
+                    destructure1!('a, LexicalElement::Identifier(a) => a.to_string()),
+                )),
+                combinator::opt(sequence::preceded(
+                    parse_unit(LexicalElement::Colon),
+                    destructure1!('a, LexicalElement::Identifier(a) => a.to_string()),
                 ))
-            >> ({
-                let mut rv = Vec::new();
-                let mut rest = rest;
-                rv.push(name);
-                rv.append(&mut rest);
-                FuncName(rv, last_name)
-            })
-    )
-);
+            )),
+            |(a, mut r, l)| {
+                let mut rv = vec![a];
+                rv.append(&mut r);
+                FuncName(rv, l)
+            },
+        )(i)
+    }
+}
 
-impl_parse!(
-    FuncBody,
-    do_parse!(
-        le_tag!(LexicalElement::OpenParen)
-            >> params: opt!(call!(ParList::parse))
-            >> le_tag!(LexicalElement::CloseParen)
-            >> chunk: call!(Chunk::parse)
-            >> le_tag!(LexicalElement::Keyword("end"))
-            >> ({
-                let params = if let Some(v) = params {
-                    v
-                } else {
-                    ParList(Vec::new(), false)
-                };
-                FuncBody(Box::new(params), Box::new(chunk))
-            })
-    )
-);
+impl Parseable for FuncBody {
+    fn parse<'a>(i: &'a [LexicalElement<'a>]) -> IResult<&'a [LexicalElement<'a>], Self, NullError> {
+        combinator::map(
+            sequence::tuple((
+                parse_unit(LexicalElement::OpenParen),
+                combinator::opt(ParList::parse),
+                parse_unit(LexicalElement::CloseParen),
+                Chunk::parse,
+                parse_unit(LexicalElement::Keyword("end")),
+            )),
+            |(_, pl, _, c, _)| {
+                let pl = pl.unwrap_or_else(|| ParList(vec![], false));
+                FuncBody(Box::new(pl), Box::new(c))
+            },
+        )(i)
+    }
+}
 
-impl_parse!(
-    Function,
-    do_parse!(
-        le_tag!(LexicalElement::Keyword("function"))
-            >> fb: call!(FuncBody::parse)
-            >> (Function(fb))
-    )
-);
+impl Parseable for Function {
+    fn parse<'a>(i: &'a [LexicalElement<'a>]) -> IResult<&'a [LexicalElement<'a>], Self, NullError> {
+        combinator::map(
+            sequence::preceded(
+                parse_unit(LexicalElement::Keyword("function")),
+                FuncBody::parse,
+            ),
+            Function
+        )(i)
+    }
+}
 
-impl_parse!(
-    NameAndArgs,
-    do_parse!(
-        name: opt!(do_parse!(
-            le_tag!(LexicalElement::Colon)
-                >> name: le_tag!(LexicalElement::Identifier(s) => s)
-                >> (name.to_string())
-        )) >> args: call!(Args::parse)
-            >> (NameAndArgs(name, args))
-    )
-);
+impl Parseable for NameAndArgs {
+    fn parse<'a>(i: &'a [LexicalElement<'a>]) -> IResult<&'a [LexicalElement<'a>], Self, NullError> {
+        combinator::map(
+            sequence::pair(
+                combinator::opt(sequence::preceded(
+                    parse_unit(LexicalElement::Colon),
+                    destructure1!('a, LexicalElement::Identifier(s) => s.to_string()),
+                )),
+                Args::parse,
+            ),
+            |(name, args)| NameAndArgs(name, args),
+        )(i)
+    }
+}
 
-impl_parse!(
-    VarSuffix,
-    alt!(
-        do_parse!(
-            naa: many0!(call!(NameAndArgs::parse))
-                >> le_tag!(LexicalElement::OpenSquare)
-                >> exp: call!(Exp::parse)
-                >> le_tag!(LexicalElement::CloseSquare)
-                >> (VarSuffix::Index(naa, exp))
-        ) | do_parse!(
-            naa: many0!(call!(NameAndArgs::parse))
-                >> le_tag!(LexicalElement::Dot)
-                >> name: le_tag!(LexicalElement::Identifier(s) => s.to_string())
-                >> (VarSuffix::Member(naa, name))
-        )
-    )
-);
+impl Parseable for VarSuffix {
+    fn parse<'a>(i: &'a [LexicalElement<'a>]) -> IResult<&'a [LexicalElement<'a>], Self, NullError> {
+        branch::alt((
+            combinator::map(
+                sequence::tuple((
+                    multi::many0(NameAndArgs::parse),
+                    parse_unit(LexicalElement::OpenSquare),
+                    Exp::parse,
+                    parse_unit(LexicalElement::CloseSquare),
+                )),
+                |(naa, _, exp, _)| VarSuffix::Index(naa, exp),
+            ),
+            combinator::map(
+                sequence::tuple((
+                    multi::many0(NameAndArgs::parse),
+                    parse_unit(LexicalElement::Dot),
+                    destructure1!('a, LexicalElement::Identifier(s) => s.to_string()),
+                )),
+                |(naa, _, name)| VarSuffix::Member(naa, name),
+            ),
+        ))(i)
+    }
+}
 
-impl_parse!(
-    Var,
-    alt!(
-        do_parse!(
-            name: le_tag!(LexicalElement::Identifier(s) => s.to_string())
-                >> vss: many0!(call!(VarSuffix::parse))
-                >> (Var::Name(name, vss))
-        ) | do_parse!(
-            le_tag!(LexicalElement::OpenParen)
-                >> exp: call!(Exp::parse)
-                >> le_tag!(LexicalElement::CloseParen)
-                >> vss: many1!(call!(VarSuffix::parse))
-                >> (Var::Exp(exp, vss))
-        )
-    )
-);
+impl Parseable for Var {
+    fn parse<'a>(i: &'a [LexicalElement<'a>]) -> IResult<&'a [LexicalElement<'a>], Self, NullError> {
+        branch::alt((
+            combinator::map(
+                sequence::pair(
+                    destructure1!('a, LexicalElement::Identifier(s) => s.to_string()),
+                    multi::many0(VarSuffix::parse),
+                ),
+                |(name, vss)| Var::Name(name, vss),
+            ),
+            combinator::map(
+                sequence::tuple((
+                    parse_unit(LexicalElement::OpenParen),
+                    Exp::parse,
+                    parse_unit(LexicalElement::CloseParen),
+                    multi::many1(VarSuffix::parse),
+                )),
+                |(_, exp, _, vss)| Var::Exp(exp, vss),
+            ),
+        ))(i)
+    }
+}
 
-impl_parse!(
-    VarList,
-    do_parse!(
-        var: call!(Var::parse)
-            >> rest: many0!(do_parse!(
-                le_tag!(LexicalElement::Comma) >> name: call!(Var::parse) >> (name)
-            ))
-            >> ({
-                let mut rv = Vec::new();
-                let mut rest = rest;
-                rv.push(var);
-                rv.append(&mut rest);
-                VarList(rv)
-            })
-    )
-);
+impl Parseable for VarList {
+    fn parse<'a>(i: &'a [LexicalElement<'a>]) -> IResult<&'a [LexicalElement<'a>], Self, NullError> {
+        combinator::map(
+            sequence::pair(
+                Var::parse,
+                multi::many0(sequence::preceded(
+                    parse_unit(LexicalElement::Comma),
+                    Var::parse,
+                )),
+            ),
+            |(var, mut rest)| {
+                let mut v = vec![var];
+                v.append(&mut rest);
+                VarList(v)
+            },
+        )(i)
+    }
+}
 
-impl_parse!(
-    Exp,
-    alt!(
-        do_parse!(
-            uo: call!(UnOp::parse) >> ex: call!(Exp::parse) >> (Exp::UnaryOp(uo, Box::new(ex)))
-        ) | do_parse!(
-            e1: call!(SimpleExp::parse)
-                >> bo: call!(BinOp::parse)
-                >> e2: call!(Exp::parse)
-                >> (Exp::BinaryOp(Box::new(Exp::SimpleExp(Box::new(e1))), bo, Box::new(e2)))
-        ) | do_parse!(se: call!(SimpleExp::parse) >> (Exp::SimpleExp(Box::new(se))))
-    )
-);
+// OMG I just realized how slow this would be, there is an exponential amount of attempts that the
+// second option would fall back into the third
+// FIXME: This should do the whole e0 ::= e1 (op e1)* thing, with construction done based on
+// precedence. This is a holdover from my previous awful rebalancing strategy
+impl Parseable for Exp {
+    fn parse<'a>(i: &'a [LexicalElement<'a>]) -> IResult<&'a [LexicalElement<'a>], Self, NullError> {
+        branch::alt((
+            combinator::map(
+                sequence::pair(
+                    UnOp::parse,
+                    Exp::parse,
+                ),
+                |(uo, ex)| Exp::UnaryOp(uo, Box::new(ex)),
+            ),
+            combinator::map(
+                sequence::tuple((
+                    SimpleExp::parse,
+                    BinOp::parse,
+                    Exp::parse,
+                )),
+                |(e1, bo, e2)| Exp::BinaryOp(Box::new(Exp::SimpleExp(Box::new(e1))), bo, Box::new(e2)),
+            ),
+            combinator::map(SimpleExp::parse, |se| Exp::SimpleExp(Box::new(se))),
+        ))(i)
+    }
+}
 
-impl_parse!(
-    VarOrExp,
-    alt!(
-        do_parse!(var: call!(Var::parse) >> (VarOrExp::Var(var)))
-            | do_parse!(
-                le_tag!(LexicalElement::OpenParen)
-                    >> exp: call!(Exp::parse)
-                    >> le_tag!(LexicalElement::CloseParen)
-                    >> (VarOrExp::Exp(exp))
-            )
-    )
-);
+impl Parseable for VarOrExp {
+    fn parse<'a>(i: &'a [LexicalElement<'a>]) -> IResult<&'a [LexicalElement<'a>], Self, NullError> {
+        branch::alt((
+            combinator::map(Var::parse, |v| VarOrExp::Var(v)),
+            combinator::map(
+                sequence::tuple((
+                    parse_unit(LexicalElement::OpenParen),
+                    Exp::parse,
+                    parse_unit(LexicalElement::CloseParen),
+                )),
+                |(_, e, _)| VarOrExp::Exp(e),
+            ),
+        ))(i)
+    }
+}
 
-impl_parse!(
-    PrefixExp,
-    do_parse!(
-        voe: call!(VarOrExp::parse)
-            >> naa: many0!(call!(NameAndArgs::parse))
-            >> (PrefixExp(Box::new(voe), naa))
-    )
-);
+impl Parseable for PrefixExp {
+    fn parse<'a>(i: &'a [LexicalElement<'a>]) -> IResult<&'a [LexicalElement<'a>], Self, NullError> {
+        combinator::map(
+            sequence::pair(
+                VarOrExp::parse,
+                multi::many0(NameAndArgs::parse),
+            ),
+            |(voe, naa)| PrefixExp(Box::new(voe), naa),
+        )(i)
+    }
+}
 
-impl_parse!(
-    FunctionCall,
-    do_parse!(
-        voe: call!(VarOrExp::parse)
-            >> naa: many1!(call!(NameAndArgs::parse))
-            >> (FunctionCall(Box::new(voe), naa))
-    )
-);
+impl Parseable for FunctionCall {
+    fn parse<'a>(i: &'a [LexicalElement<'a>]) -> IResult<&'a [LexicalElement<'a>], Self, NullError> {
+        combinator::map(
+            sequence::pair(
+                VarOrExp::parse,
+                multi::many1(NameAndArgs::parse),
+            ),
+            |(voe, naa)| FunctionCall(Box::new(voe), naa),
+        )(i)
+    }
+}
 
-impl_parse!(
-    Stat,
-    alt!(
-        do_parse!(
-            vl: call!(VarList::parse)
-                >> le_tag!(LexicalElement::Assign)
-                >> el: call!(ExpList::parse)
-                >> (Stat::Assign(Box::new(vl), Box::new(el)))
-        ) | do_parse!(fc: call!(FunctionCall::parse) >> (Stat::FunctionCall(Box::new(fc))))
-            | do_parse!(
-                le_tag!(LexicalElement::Keyword("do"))
-                    >> chunk: call!(Chunk::parse)
-                    >> le_tag!(LexicalElement::Keyword("end"))
-                    >> (Stat::DoBlock(Box::new(chunk)))
-            )
-            | do_parse!(
-                le_tag!(LexicalElement::Keyword("while"))
-                    >> exp: call!(Exp::parse)
-                    >> le_tag!(LexicalElement::Keyword("do"))
-                    >> chunk: call!(Chunk::parse)
-                    >> le_tag!(LexicalElement::Keyword("end"))
-                    >> (Stat::WhileBlock(Box::new(exp), Box::new(chunk)))
-            )
-            | do_parse!(
-                le_tag!(LexicalElement::Keyword("repeat"))
-                    >> chunk: call!(Chunk::parse)
-                    >> le_tag!(LexicalElement::Keyword("until"))
-                    >> exp: call!(Exp::parse)
-                    >> (Stat::RepeatBlock(Box::new(exp), Box::new(chunk)))
-            )
-            | do_parse!(
-                le_tag!(LexicalElement::Keyword("if"))
-                    >> exp1: call!(Exp::parse)
-                    >> le_tag!(LexicalElement::Keyword("then"))
-                    >> chunk1: call!(Chunk::parse)
-                    >> rest: many0!(do_parse!(
-                        le_tag!(LexicalElement::Keyword("elseif"))
-                            >> exp: call!(Exp::parse)
-                            >> le_tag!(LexicalElement::Keyword("then"))
-                            >> chunk: call!(Chunk::parse)
-                            >> ((exp, chunk))
-                    ))
-                    >> else_chunk:
-                        opt!(do_parse!(
-                            le_tag!(LexicalElement::Keyword("else"))
-                                >> ch: call!(Chunk::parse)
-                                >> (ch)
-                        ))
-                    >> le_tag!(LexicalElement::Keyword("end"))
-                    >> ({
-                        let mut v = vec![(exp1, chunk1)];
-                        let mut rest = rest;
-                        v.append(&mut rest);
-                        Stat::IfElseBlock(v, else_chunk.map(|x| Box::new(x)))
-                    })
-            )
-            | do_parse!(
-                le_tag!(LexicalElement::Keyword("for"))
-                    >> name: le_tag!(LexicalElement::Identifier(s) => s.to_string())
-                    >> le_tag!(LexicalElement::Assign)
-                    >> e1: call!(Exp::parse)
-                    >> le_tag!(LexicalElement::Comma)
-                    >> e2: call!(Exp::parse)
-                    >> e3: opt!(do_parse!(
-                        le_tag!(LexicalElement::Comma) >> e: call!(Exp::parse) >> (e)
-                    ))
-                    >> le_tag!(LexicalElement::Keyword("do"))
-                    >> ch: call!(Chunk::parse)
-                    >> le_tag!(LexicalElement::Keyword("end"))
-                    >> ({
-                        let mut ev = vec![e1, e2];
-                        if let Some(v) = e3 {
-                            ev.push(v);
-                        }
-                        Stat::ForRangeBlock(name, ev, Box::new(ch))
-                    })
-            )
-            | do_parse!(
-                le_tag!(LexicalElement::Keyword("for"))
-                    >> nl: call!(NameList::parse)
-                    >> le_tag!(LexicalElement::Keyword("in"))
-                    >> el: call!(ExpList::parse)
-                    >> le_tag!(LexicalElement::Keyword("do"))
-                    >> ch: call!(Chunk::parse)
-                    >> le_tag!(LexicalElement::Keyword("end"))
-                    >> (Stat::ForInBlock(Box::new(nl), Box::new(el), Box::new(ch)))
-            )
-            | do_parse!(
-                le_tag!(LexicalElement::Keyword("function"))
-                    >> name: call!(FuncName::parse)
-                    >> body: call!(FuncBody::parse)
-                    >> (Stat::FunctionDec(name, Box::new(body)))
-            )
-            | do_parse!(
-                le_tag!(LexicalElement::Keyword("local"))
-                    >> le_tag!(LexicalElement::Keyword("function"))
-                    >> name: le_tag!(LexicalElement::Identifier(s) => s.to_string())
-                    >> body: call!(FuncBody::parse)
-                    >> (Stat::LocalFunctionDec(name, Box::new(body)))
-            )
-            | do_parse!(
-                le_tag!(LexicalElement::Keyword("local"))
-                    >> nl: call!(NameList::parse)
-                    >> el: opt!(do_parse!(
-                        le_tag!(LexicalElement::Assign) >> el: call!(ExpList::parse) >> (el)
-                    ))
-                    >> (Stat::LocalAssign(
-                        Box::new(nl),
-                        (if let Some(el) = el {
-                            el
-                        } else {
-                            ExpList(Vec::new())
-                        })
-                    ))
-            )
-    )
-);
+impl Parseable for Stat {
+    fn parse<'a>(i: &'a [LexicalElement<'a>]) -> IResult<&'a [LexicalElement<'a>], Self, NullError> {
+        branch::alt((
+            combinator::map(
+                sequence::tuple((
+                    VarList::parse,
+                    parse_unit(LexicalElement::Assign),
+                    ExpList::parse,
+                )),
+                |(vl, _, el)| Stat::Assign(Box::new(vl), Box::new(el)),
+            ),
+            combinator::map(FunctionCall::parse, |fc| Stat::FunctionCall(Box::new(fc))),
+            combinator::map(
+                sequence::tuple((
+                    parse_unit(LexicalElement::Keyword("do")),
+                    Chunk::parse,
+                    parse_unit(LexicalElement::Keyword("end")),
+                )),
+                |(_, chunk, _)| Stat::DoBlock(Box::new(chunk)),
+            ),
+            combinator::map(
+                sequence::tuple((
+                    parse_unit(LexicalElement::Keyword("while")),
+                    Exp::parse,
+                    parse_unit(LexicalElement::Keyword("do")),
+                    Chunk::parse,
+                    parse_unit(LexicalElement::Keyword("end")),
+                )),
+                |(_, exp, _, chunk, _)| Stat::WhileBlock(Box::new(exp), Box::new(chunk)),
+            ),
+            combinator::map(
+                sequence::tuple((
+                    parse_unit(LexicalElement::Keyword("repeat")),
+                    Chunk::parse,
+                    parse_unit(LexicalElement::Keyword("until")),
+                    Exp::parse,
+                )),
+                |(_, chunk, _, exp)| Stat::RepeatBlock(Box::new(exp), Box::new(chunk)),
+            ),
+            combinator::map(
+                sequence::tuple((
+                    parse_unit(LexicalElement::Keyword("if")),
+                    Exp::parse,
+                    parse_unit(LexicalElement::Keyword("then")),
+                    Chunk::parse,
+                    multi::many0(combinator::map(
+                        sequence::tuple((
+                            parse_unit(LexicalElement::Keyword("elseif")),
+                            Exp::parse,
+                            parse_unit(LexicalElement::Keyword("then")),
+                            Chunk::parse,
+                        )),
+                        |(_, exp, _, chunk)| (exp, chunk),
+                    )),
+                    combinator::opt(
+                        sequence::preceded(
+                            parse_unit(LexicalElement::Keyword("else")),
+                            Chunk::parse,
+                        )
+                    ),
+                    parse_unit(LexicalElement::Keyword("end")),
+                )),
+                |(
+                    _,
+                    exp1,
+                    _,
+                    chunk1,
+                    rest,
+                    else_chunk,
+                    _,
+                )| {
+                    let mut v = vec![(exp1, chunk1)];
+                    let mut rest = rest;
+                    v.append(&mut rest);
+                    Stat::IfElseBlock(v, else_chunk.map(|x| Box::new(x)))
+                },
+            ),
+            combinator::map(
+                sequence::tuple((
+                    parse_unit(LexicalElement::Keyword("for")),
+                    destructure1!('a, LexicalElement::Identifier(s) => s.to_string()),
+                    parse_unit(LexicalElement::Assign),
+                    Exp::parse,
+                    parse_unit(LexicalElement::Comma),
+                    Exp::parse,
+                    combinator::opt(sequence::preceded(parse_unit(LexicalElement::Comma), Exp::parse)),
+                    parse_unit(LexicalElement::Keyword("do")),
+                    Chunk::parse,
+                    parse_unit(LexicalElement::Keyword("end")),
+                )),
+                |(_, name, _, e1, _, e2, e3, _, ch, _)| {
+                    let mut ev = vec![e1, e2];
+                    if let Some(v) = e3 {
+                        ev.push(v);
+                    }
+                    Stat::ForRangeBlock(name, ev, Box::new(ch))
+                },
+            ),
+            combinator::map(
+                sequence::tuple((
+                    parse_unit(LexicalElement::Keyword("for")),
+                    NameList::parse,
+                    parse_unit(LexicalElement::Keyword("in")),
+                    ExpList::parse,
+                    parse_unit(LexicalElement::Keyword("do")),
+                    Chunk::parse,
+                    parse_unit(LexicalElement::Keyword("end")),
+                )),
+                |(_, nl, _, el, _, ch, _)| Stat::ForInBlock(Box::new(nl), Box::new(el), Box::new(ch)),
+            ),
+            combinator::map(
+                sequence::tuple((
+                    parse_unit(LexicalElement::Keyword("function")),
+                    FuncName::parse,
+                    FuncBody::parse,
+                )),
+                |(_, name, body)| Stat::FunctionDec(name, Box::new(body)),
+            ),
+            combinator::map(
+                sequence::tuple((
+                    parse_unit(LexicalElement::Keyword("local")),
+                    parse_unit(LexicalElement::Keyword("function")),
+                    destructure1!('a, LexicalElement::Identifier(s) => s.to_string()),
+                    FuncBody::parse,
+                )),
+                |(_, _, name, body)| Stat::LocalFunctionDec(name, Box::new(body)),
+            ),
+            combinator::map(
+                sequence::tuple((
+                    parse_unit(LexicalElement::Keyword("local")),
+                    NameList::parse,
+                    combinator::opt(sequence::preceded(
+                        parse_unit(LexicalElement::Assign),
+                        ExpList::parse,
+                    )),
+                )),
+                |(_, nl, el)| {
+                    let el = el.unwrap_or_else(|| ExpList(Vec::new()));
+                    Stat::LocalAssign(Box::new(nl), el)
+                },
+            ),
+        ))(i)
+    }
+}
 
-// all ok beyond this point
+impl Parseable for Chunk {
+    fn parse<'a>(i: &'a [LexicalElement<'a>]) -> IResult<&'a [LexicalElement<'a>], Self, NullError> {
+        combinator::map(
+            sequence::pair(
+                multi::many0(sequence::terminated(
+                    Stat::parse,
+                    combinator::opt(parse_unit(LexicalElement::Semicolon)),
+                )),
+                combinator::opt(sequence::terminated(
+                    LastStat::parse,
+                    combinator::opt(parse_unit(LexicalElement::Semicolon)),
+                )),
+            ),
+            |(ss, ls)| Chunk(ss, ls),
+        )(i)
+    }
+}
 
-impl_parse!(
-    LastStat,
-    alt!(
-        le_tag!(LexicalElement::Keyword("break") => LastStat::Break)
-            | do_parse!(
-                le_tag!(LexicalElement::Keyword("return"))
-                    >> es: opt!(call!(ExpList::parse))
-                    >> (match es {
-                        Some(es) => LastStat::Return(Box::new(es)),
-                        None => LastStat::Return(Box::new(ExpList(Vec::new()))),
-                    })
-            )
-    )
-);
-
-impl_parse!(
-    Chunk,
-    do_parse!(
-        ss: many0!(do_parse!(
-            s: call!(Stat::parse) >> opt!(le_tag!(LexicalElement::Semicolon)) >> (s)
-        )) >> ls: opt!(do_parse!(
-            s: call!(LastStat::parse) >> opt!(le_tag!(LexicalElement::Semicolon)) >> (s)
-        )) >> (Chunk(ss, ls))
-    )
-);
+impl Parseable for LastStat {
+    fn parse<'a>(i: &'a [LexicalElement<'a>]) -> IResult<&'a [LexicalElement<'a>], Self, NullError> {
+        branch::alt((
+            destructure1!('a, LexicalElement::Keyword("break") => LastStat::Break),
+            combinator::map(
+                sequence::preceded(
+                    parse_unit(LexicalElement::Keyword("return")),
+                    combinator::opt(ExpList::parse),
+                ),
+                |es| match es {
+                    Some(es) => LastStat::Return(Box::new(es)),
+                    None => LastStat::Return(Box::new(ExpList(Vec::new()))),
+                },
+            ),
+        ))(i)
+    }
+}
 
 #[derive(Default)]
 struct ExpBalanceVisitor;
@@ -623,7 +707,7 @@ impl ExpBalanceVisitor {
         &mut self,
         e: Exp,
         precedence: u8,
-    ) -> (Exp, Box<FnMut(Exp) -> Exp>) {
+    ) -> (Exp, Box<dyn FnMut(Exp) -> Exp>) {
         match e {
             e @ Exp::SimpleExp(_) | e @ Exp::UnaryOp(_, _) => (e, Box::new(move |e: Exp| e)),
             Exp::BinaryOp(le, op, re) => {
@@ -651,7 +735,7 @@ impl ExpBalanceVisitor {
         &mut self,
         e: Exp,
         precedence: u8,
-    ) -> (Exp, Box<FnMut(Exp) -> Exp>) {
+    ) -> (Exp, Box<dyn FnMut(Exp) -> Exp>) {
         match e {
             e @ Exp::SimpleExp(_) => (e, Box::new(move |e: Exp| e)),
             Exp::UnaryOp(uo, ie) => match UnOp::precedence().cmp(&precedence) {
@@ -698,7 +782,7 @@ impl ASTVisitor<u8> for ExpBalanceVisitor {
                     self.visit_simple_exp(se.as_mut());
                     Exp::SimpleExp(se)
                 },
-                Exp::UnaryOp(op, mut ce) => {
+                Exp::UnaryOp(op, ce) => {
                     self.move_unary_op_down(*ce, op)
                 },
                 Exp::BinaryOp(mut ce1, op, mut ce2) => {
@@ -763,23 +847,18 @@ impl ASTVisitor<u8> for ExpBalanceVisitor {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub enum ParseError {
-    Error,
-}
-
 #[allow(dead_code)]
-pub fn parse_lua_source(input: &[u8]) -> Result<Chunk, ParseError> {
+pub fn parse_lua_source(input: &[u8]) -> Result<Chunk, NullError> {
     //let tokens = lex::tokenify_string(input).map_err(|_|ParseError::Error)?;
-    let tokens = lex::tokenify_string(input).unwrap();
+    let tokens = lex::tokenify_string(input)?;
     parse_chunk(&tokens)
 }
 
 #[allow(dead_code)]
-pub fn parse_chunk(input: &[LexicalElement]) -> Result<Chunk, ParseError> {
+pub fn parse_chunk(input: &[LexicalElement]) -> Result<Chunk, NullError> {
     let (_, mut parsed) = match Chunk::parse(input) {
-        IResult::Done(np, mut p) => (np, p),
-        _ => return Err(ParseError::Error),
+        IResult::Ok((np, p)) => (np, p),
+        _ => return Err(NULL_ERROR),
     };
     let mut ebv = ExpBalanceVisitor::default();
     ebv.visit_chunk(&mut parsed);
@@ -787,10 +866,10 @@ pub fn parse_chunk(input: &[LexicalElement]) -> Result<Chunk, ParseError> {
 }
 
 #[allow(dead_code)]
-fn parse_exp(input: &[LexicalElement]) -> Result<Exp, ParseError> {
+fn parse_exp(input: &[LexicalElement]) -> Result<Exp, NullError> {
     let (_, mut parsed) = match Exp::parse(input) {
-        IResult::Done(np, mut p) => (np, p),
-        _ => return Err(ParseError::Error),
+        IResult::Ok((np, p)) => (np, p),
+        _ => return Err(NULL_ERROR),
     };
     let mut ebv = ExpBalanceVisitor::default();
     ebv.visit_exp(&mut parsed);
@@ -800,7 +879,6 @@ fn parse_exp(input: &[LexicalElement]) -> Result<Exp, ParseError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ast_types::*;
 
     macro_rules! tree {
         (+, $a:expr, $b:expr) => {
@@ -1234,7 +1312,7 @@ mod tests {
     fn test_parse_table_constructor() {
         {
             let input = lex::tokenify_string(b"5").unwrap();
-            let field = Field::parse(&input).unwrap().1;
+            let field: Field = Field::parse(&input).unwrap().1;
             assert_eq!(
                 field,
                 Field::Exp(Box::new(Exp::SimpleExp(Box::new(SimpleExp::Number(5.0)))))
@@ -1283,6 +1361,12 @@ mod tests {
 
     #[test]
     fn test_parser() {
+        {
+            let input = b"4.0";
+            let input = lex::tokenify_string(&input[..]).unwrap();
+            println!("{:?}", input);
+            Exp::parse(&input).unwrap();
+        }
         {
             let input = b"4.0 + - nil ^ nil";
             let input = lex::tokenify_string(&input[..]).unwrap();
@@ -1343,5 +1427,15 @@ mod tests {
         //println!("NameAndArgs: {}"               ,  size_of::<NameAndArgs     >());
         //println!("VarSuffix: {}"                 ,  size_of::<VarSuffix       >());
         //println!("VarOrExp: {}"                  ,  size_of::<VarOrExp        >());
+    }
+
+    #[test]
+    fn test_parse_unit() {
+        {
+            let name = "hello";
+            let lex = [LexicalElement::Minus, LexicalElement::Identifier(name)];
+            assert!(parse_unit(LexicalElement::Plus)(&lex).is_err());
+            assert_eq!(parse_unit(LexicalElement::Minus)(&lex).unwrap().1, &lex[0]);
+        }
     }
 }

@@ -1,3 +1,7 @@
+use nom::IResult;
+
+use crate::error::NullError;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LexicalElement<'a> {
     Keyword(&'static str),
@@ -33,10 +37,9 @@ pub enum LexicalElement<'a> {
     GreaterThan,
 }
 
-use nom::IResult;
-
 pub trait Parseable: Sized {
-    fn parse<'a, 'b>(i: &'a [LexicalElement<'b>]) -> IResult<&'a [LexicalElement<'b>], Self>;
+    fn parse<'a>(i: &'a [LexicalElement<'a>])
+        -> IResult<&'a [LexicalElement<'a>], Self, NullError>;
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
