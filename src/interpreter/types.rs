@@ -59,7 +59,7 @@ impl LuaValue {
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub enum LuaIndexValue {
     Boolean(bool),
-    Number(ordered_float::NotNaN<f64>),
+    Number(ordered_float::NotNan<f64>),
     String(String),
     Function(LuaFunction),
     Table(LuaTableRef),
@@ -73,11 +73,8 @@ impl LuaIndexValue {
             LuaValue::Nil => Err(format!("Table index is nil")),
             LuaValue::Boolean(t) => Ok(LuaIndexValue::Boolean(t)),
             LuaValue::Number(n) => {
-                if n.is_nan() {
-                    Err(format!("Table index is NaN"))
-                } else {
-                    Ok(LuaIndexValue::Number(ordered_float::NotNaN::from(n)))
-                }
+                let v = ordered_float::NotNan::new(n).map_err(|_| format!("Table index is NaN"))?;
+                Ok(LuaIndexValue::Number(v))
             }
             LuaValue::String(s) => Ok(LuaIndexValue::String(s)),
             LuaValue::Function(lf) => Ok(LuaIndexValue::Function(lf)),
